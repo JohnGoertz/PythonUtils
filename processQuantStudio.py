@@ -2,20 +2,10 @@ import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import pathlib as pl
 import scipy.stats as stat
 import scipy.optimize as opt
-import sys
 
-myhome = pl.Path(__file__)
-myparent = myhome.parent.parent
-
-sys.path.append(str(myparent))
-
-
-import myUtils as mypy
-
-
+from . import myUtils as mypy
 
 ###############################################################################
 #%% Import Data
