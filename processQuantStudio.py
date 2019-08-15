@@ -188,7 +188,8 @@ def setupGrid(n_t,n_q):
                         sharey=True, sharex=True,
                         gridspec_kw={'hspace': 0., 'wspace': 0.})
 
-    
+
+###############################################################################
 #%% Plot efficiencies from CT fits
 # Function for determining efficiency from CT fits with uncertainty
 def calc_E (ct_mat,quant_list,n_reps):
@@ -262,6 +263,7 @@ def plotEfit(targets, lg_q, CTs, t_colors = None):
             'ax_CT_effs'        : ax_CT_effs}
     
 
+###############################################################################
 #%% Model definitions and fitting functions
 
 # 4- and 5- parameter logistic models (4PLM, 5PLM)
@@ -413,6 +415,7 @@ def fitBLM(F, ln2E, ctrl_pts, Lin1_params, Lin2_params):
     return p_opt_E_BLM
 
 
+###############################################################################
 #%% Fit each curve
 def fit_all_curves(F):
     n_t, n_q, n_r, n_c = F.shape
@@ -463,7 +466,9 @@ def fit_all_curves(F):
     
     return [sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts, E, ln2E, E0,
             skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit]
+  
     
+###############################################################################
 #%% Plot each curve 
 def plot_all_curves(F, targets, quantities, t_map,
                     sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts,
@@ -574,6 +579,8 @@ def plot_all_curves(F, targets, quantities, t_map,
     
     return EvC_figs, EvC_axs, ln2EvF_figs, ln2EvF_axs
 
+
+###############################################################################
 #%% Make detailed side-by-side comparison plots for one target        
 
 def focusTarget(focus_t, F, targets, quantities, 
@@ -695,7 +702,8 @@ def focusTarget(focus_t, F, targets, quantities,
     return focus_figs, focus_axs
 
 
-   
+ 
+###############################################################################  
 #%% Plot parameters by target and quantity
 
 def DF_params(params, F, targets, quantities):
