@@ -570,7 +570,7 @@ def plot_all_curves(F, targets, quantities, t_map,
         #Overlay the bilinear model fits
         if badBLMFit[i,j,k]: continue
         BLM_F = this_F[start_decline:-1]
-        x = np.linspace(this_F[start_decline],np.max(F),100)
+        x = np.linspace(this_F[start_decline],np.max(this_F),100)
         BLM_c = c[start_decline:-1]
         axs_ln2EvF_BLM[t].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
         axs_EvC_BLM[t].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)
@@ -671,7 +671,7 @@ def focusTarget(focus_t, F, targets, quantities,
         #Overlay the bilinear model fits
         if badBLMFit[i,j,k]: continue
         BLM_F = this_F[start_decline:-1]
-        x = np.linspace(this_F[start_decline],np.max(F),100)
+        x = np.linspace(this_F[start_decline],np.max(this_F),100)
         BLM_c = c[start_decline:-1]
         axs_focus_BLM[1].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
         axs_focus_BLM[2].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)

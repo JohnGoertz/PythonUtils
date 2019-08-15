@@ -28,8 +28,8 @@ def timeStamped(fname, fmt='{fname} %y-%m-%d'):
     return datetime.datetime.now().strftime(fmt).format(fname=fname)
 
 
-def setupPath(processed = None):
-    code_pth = pl.Path(__file__)
+def setupPath(file,processed = None):
+    code_pth = pl.Path(file)
     base_pth = code_pth.parent.parent
     if processed is None:
         data_pth = base_pth / 'Data'
