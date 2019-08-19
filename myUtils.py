@@ -13,10 +13,10 @@ from tqdm import tqdm
 
 def plotSettings():
     plt.style.use('seaborn-poster')
-    
+
     mpl.rcParams['axes.linewidth'] = 2
     mpl.rcParams['patch.linewidth'] = 2
-    
+
     mpl.rcParams['font.size'] = '20'
     mpl.rcParams['figure.titlesize'] = 'large'
     mpl.rcParams['figure.titleweight'] = 'bold'
@@ -28,7 +28,7 @@ def plotSettings():
     mpl.rcParams['ytick.labelsize'] = 'medium'
     return
 
-    
+
 #For datestamping files
 def timeStamped(fname, fmt='{fname} %y-%m-%d'):
     return datetime.datetime.now().strftime(fmt).format(fname=fname)
@@ -40,10 +40,10 @@ def setupPath(file,processed = None):
     if processed is None:
         data_pth = base_pth / 'Data'
     else:
-        data_pth = base_pth / processed   
+        data_pth = base_pth / processed
     rslt_pth_parent = base_pth / 'Results'
     rslt_pth = rslt_pth_parent / pl.Path(datetime.datetime.now().strftime('%y-%m-%d'))
-    rslt_pth.mkdir(parents=True, exist_ok=True) 
+    rslt_pth.mkdir(parents=True, exist_ok=True)
     return code_pth, base_pth, data_pth, rslt_pth, rslt_pth_parent
 
 
@@ -111,7 +111,7 @@ def classical_fit_param_summary(p_opt,p_cov, names = None):
     summary = pd.DataFrame(data = [p_ci_lower,p_opt,p_ci_upper,p_std],
                            index = ('95% CI Lower Limit','Optimal Value','95% CI Upper Limit','Standard Error'),
                            columns = names)
-    return summary    
+    return summary
 
 
 ############################################################################################################
@@ -122,61 +122,61 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
                  fit_kws = {}, conservative = True, piecewise = True):
     # If y is a vector of length 'm', x must also be a vector of length 'm'
     # If y is a matrix of shape 'm x n', with replicates in different columns, x must either be a vector of length 'm' or a matrix of shape 'm x n'
-    
+
     # Number of unique x values
     n = len(set(x))
-    
+
     # Number of replicates
     m = y.size//n
-    
+
     # Piecewise bootstrapping is nonsensical if there's only one y per x
     if y.ndim == 1: piecewise = False
-    
+
     # Generate points at which to evaluate the curves
     if xpts is None: xpts = np.linspace(x.min(),x.max(),res)
     elif xpts.size == 2: xpts = np.linspace(xpts[0],xpts[1],res)
 
     # Predicted y values
     y_fit = func(x,*p_opt)
-    
+
     # Tile the predicted y values if necessary so that they're the same shape as the original data
     if y_fit.shape != y.shape: y_fit = np.tile(y_fit,[y.size//x.size,1]).T
-        
+
     # Get the residuals (and they're )
     resid = y - y_fit
-    
+
     p_strapped = np.zeros([n_straps,p_opt.size])    # Create a matrix of zeros to store the parameters from each bootstrap iteration
     curve_strapped = np.zeros([n_straps,xpts.size]) # Another matrix to store the predicted curve for each iteration
-    
+
     for i in tqdm(range(n_straps)):
-        
+
         # Choose new residuals based on the specified method
         if piecewise and conservative:
             invalid_sample = True
             while invalid_sample:
                 resid_resamples = np.array([np.random.choice(resid[row],size = m) for row in range(n)])
                 if all(len(set(resid_resamples[row])) > 1 for row in range(n)): invalid_sample = False
-                    
+
         elif piecewise and not conservative:
             sigma_resid = [resid[row].std() for row in range(n)]
             resid_resamples = np.array([np.random.normal(0, size = m) for row in range(n)])
         elif not piecewise and not conservative:
             sigma_resid = resid.std()
             resid_resamples = np.random.normal(0, sigma_resid, size = resid.shape)
-            
+
         elif not piecewise and conservative:
             resid_resamples = np.random.choice(resid.flat, size = resid.shape)
-                
+
         # Generate a synthetic dataset from the sampled residuals
         new_y = y_fit+resid_resamples
-        
+
         if guess_gen is not None:
             # Generate guesses for this dataset
             guesses = guess_gen(x,new_y)
         else:
             # Default guesses
             guesses = np.ones(len(p_opt))
-        
+
         # Additional keyword arguments to curve_fit can be passed as a dictionary via fit_kws
         if y.ndim == 1:
             p_strapped[i], _ = opt.curve_fit(func, x, new_y,
@@ -187,9 +187,9 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
                                              sigma = new_y.std(1), absolute_sigma = True,
                                              p0 = guesses,
                                              **fit_kws)
-        
+
         curve_strapped[i] = func(xpts,*p_strapped[i])
-    
+
     return p_strapped, curve_strapped
 
 # Plot the bootstrapped curve and its confidence intervals
@@ -197,7 +197,7 @@ def bootstrap_plot(xpts,bootstrap_curves, CI = 95, line_kws ={},fill_kws={}):
     c_lower = np.percentile(bootstrap_curves,(100-CI)/2,axis = 0)
     c_median = np.percentile(bootstrap_curves,50,axis = 0)
     c_upper = np.percentile(bootstrap_curves,(100+CI)/2,axis = 0)
-    
+
     # Additional keyword arguments to plot or fill_between can be passed as a dictionary via line_kws and fill_kws, respectively
     med = plt.plot(xpts, c_median, **line_kws)
     ci = plt.fill_between(xpts, c_upper, c_lower, color = plt.getp(med[0],'color'), alpha = 0.25, **fill_kws)
@@ -208,17 +208,17 @@ def bootstrap_summary(bootstrap_params, CI = 95, names = None):
     p_lower = np.percentile(bootstrap_params,(100-CI)/2,axis = 0)
     p_median = np.percentile(bootstrap_params,50,axis = 0)
     p_upper = np.percentile(bootstrap_params,(100+CI)/2,axis = 0)
-    
+
     summary = pd.DataFrame(data = [p_lower,p_median,p_upper],
                        index = ('{:}% CI Lower Limit'.format(CI),'Median Value','{:}% CI Upper Limit'.format(CI)),
                        columns = names)
-    return summary  
+    return summary
 
 # Plot the bootstrapped distributions for each parameter and label with the modal value derived from its KDE
 def bootstrap_dists(bootstrap_params, CI = 95, names = None, rug_kws = {}, kde_kws = {}):
     _,n_p = bootstrap_params.shape
     mode = np.zeros([n_p,])
-    
+
     fig, axs = plt.subplots(1, n_p, figsize = (4*n_p,3))
     for p in range(n_p):
         sns.distplot(bootstrap_params[:,p], ax = axs[p], **rug_kws, **kde_kws)
@@ -228,17 +228,7 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, rug_kws = {}, kde_k
 
         KDE = axs[p].get_children()[-14]
         mode[p] = KDE.get_xdata()[np.argmax(KDE.get_ydata())]
-        
+
         axs[p].set_title(names[p] + '\n' + 'mode = {:.3f}'.format(mode[p]))
-        
+
     return fig, axs, mode
-            
-
-    
-    
-    
-    
-
-
-
-
