@@ -6,9 +6,7 @@ import matplotlib.pyplot as plt
 import datetime #For timestamping files
 import pathlib as pl
 import shelve #For saving/loading variables
-import scipy.stats as stats
-import scipy.optimize as opt
-from tqdm import tqdm
+import os
 
 
 def plotSettings():
@@ -34,9 +32,9 @@ def timeStamped(fname, fmt='{fname} %y-%m-%d'):
     return datetime.datetime.now().strftime(fmt).format(fname=fname)
 
 
-def setupPath(file,processed = None):
-    code_pth = pl.Path(file)
-    base_pth = code_pth.parent.parent
+def setupPath(processed = None):
+    code_pth = pl.Path(os.getcwd())
+    base_pth = code_pth.parent
     if processed is None:
         data_pth = base_pth / 'Data'
     else:
