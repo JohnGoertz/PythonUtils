@@ -117,7 +117,7 @@ def classical_fit_param_summary(p_opt,p_cov, names = None):
 
 # Performing the bootstrap algorithm
 def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, guess_gen = None,
-                 fit_kws = {}, conservative = True, piecewise = True):
+                 fit_kws = {}, conservative = True, piecewise = True, sample = 'residuals'):
     # If y is a vector of length 'm', x must also be a vector of length 'm'
     # If y is a matrix of shape 'm x n', with replicates in different columns, x must either be a vector of length 'm' or a matrix of shape 'm x n'
 
@@ -140,14 +140,14 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
     # Tile the predicted y values if necessary so that they're the same shape as the original data
     if y_fit.shape != y.shape: y_fit = np.tile(y_fit,[y.size//x.size,1]).T
 
-    # Get the residuals (and they're )
+    # Get the residuals
     resid = y - y_fit
 
     p_strapped = np.zeros([n_straps,p_opt.size])    # Create a matrix of zeros to store the parameters from each bootstrap iteration
     curve_strapped = np.zeros([n_straps,xpts.size]) # Another matrix to store the predicted curve for each iteration
 
     for i in tqdm(range(n_straps)):
-
+        
         # Choose new residuals based on the specified method
         if piecewise and conservative:
             invalid_sample = True
@@ -185,7 +185,7 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
                                              sigma = new_y.std(1), absolute_sigma = True,
                                              p0 = guesses,
                                              **fit_kws)
-
+        
         curve_strapped[i] = func(xpts,*p_strapped[i])
 
     return p_strapped, curve_strapped
@@ -198,7 +198,8 @@ def bootstrap_plot(xpts,bootstrap_curves, CI = 95, line_kws ={},fill_kws={}):
 
     # Additional keyword arguments to plot or fill_between can be passed as a dictionary via line_kws and fill_kws, respectively
     med = plt.plot(xpts, c_median, **line_kws)
-    ci = plt.fill_between(xpts, c_upper, c_lower, color = plt.getp(med[0],'color'), alpha = 0.25, **fill_kws)
+    if 'alpha' not in fill_kws.keys(): fill_kws['alpha'] = 0.25
+    ci = plt.fill_between(xpts, c_upper, c_lower, color = plt.getp(med[0],'color'), **fill_kws)
     return med, ci
 
 # Summarize parameters and confidence intervals resulting from the bootstrap algorithm
@@ -213,20 +214,37 @@ def bootstrap_summary(bootstrap_params, CI = 95, names = None):
     return summary
 
 # Plot the bootstrapped distributions for each parameter and label with the modal value derived from its KDE
-def bootstrap_dists(bootstrap_params, CI = 95, names = None, rug_kws = {}, kde_kws = {}):
+def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_kws = {}, kde_kws = {}, axs = None,
+                   show_median = True, show_CI = True):
     _,n_p = bootstrap_params.shape
     mode = np.zeros([n_p,])
-
-    fig, axs = plt.subplots(1, n_p, figsize = (4*n_p,3))
+    
+    if names is None: names = ['' for _ in range(n_p)]
+    
+    if axs is None:
+        fig, axs_ = plt.subplots(1, n_p, figsize = (4*n_p,3))
+    else: axs_ = axs
+        
+        
+    KDE_idx = -11
+    
     for p in range(n_p):
-        sns.distplot(bootstrap_params[:,p], ax = axs[p], **rug_kws, **kde_kws)
-        axs[p].axvline(np.percentile(bootstrap_params[:,p], (100-CI)/2, axis = 0), ls = '--', color = 'k')
-        axs[p].axvline(np.percentile(bootstrap_params[:,p], 50, axis = 0), ls = ':', color = 'k')
-        axs[p].axvline(np.percentile(bootstrap_params[:,p], (100+CI)/2, axis = 0), ls = '--', color = 'k')
+        sns.distplot(bootstrap_params[:,p], ax = axs_[p], **plt_kws, rug_kws = rug_kws, kde_kws = {'label' : 'KDE'})
+        if show_median:
+            axs_[p].axvline(np.percentile(bootstrap_params[:,p], 50, axis = 0), ls = ':', color = 'k', label = 'median')
+        if show_CI:
+            axs_[p].axvline(np.percentile(bootstrap_params[:,p], (100-CI)/2, axis = 0), ls = '--', color = 'k', label = '{:d}% CI'.format(CI))
+            axs_[p].axvline(np.percentile(bootstrap_params[:,p], (100+CI)/2, axis = 0), ls = '--', color = 'k')
+            KDE_idx -= 2
+        KDE = axs_[p].lines[0]
 
-        KDE = axs[p].get_children()[-14]
         mode[p] = KDE.get_xdata()[np.argmax(KDE.get_ydata())]
-
-        axs[p].set_title(names[p] + '\n' + 'mode = {:.3f}'.format(mode[p]))
-
-    return fig, axs, mode
+        if axs is None:
+            axs_[p].set_title(names[p] + '\n' + 'mode = {:.3f}'.format(mode[p]))
+        else:
+            axs_[p].set_title(names[p])
+            
+    
+    if axs is not None: fig = plt.gcf()
+        
+    return fig, axs_, mode
