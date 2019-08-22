@@ -289,3 +289,52 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_k
     if axs is not None: fig = plt.gcf()
         
     return fig, axs_, mode
+
+def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names = None):
+    from scipy.special import erfinv
+    from scipy.special import erf
+
+    def ncdf(x):
+        return 0.5*(1+erf(x/2**0.5))
+    
+    def nppf(x):
+        return 2**0.5 * erfinv(2*x-1)
+    
+    def jackknife(data):
+        """
+    Given data points data, where axis 0 is considered to delineate points, return
+    a list of arrays where each array is a set of jackknife indexes.
+    For a given set of data Y, the jackknife sample J[i] is defined as the data set
+    Y with the ith data point deleted.
+        """
+        base = np.arange(0,len(data))
+        return (np.delete(base,i) for i in base)
+    
+    z0 = nppf( ( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  ) / straps )
+    
+    idx_jack = jackknife(y)
+    p_jack = np.array([opt.curve_fit(func,x[idx],y[idx])[0] for idx in idx_jack])
+    p_jmean = np.mean(p_jack,axis=0)
+    
+    # Acceleration value
+    a = np.sum((p_jmean - p_jack)**3, axis=0) / (
+        6.0 * np.sum((p_jmean - p_jack)**2, axis=0)**1.5)
+    
+    alphas = np.array([100-CI,100+CI])/200.
+    print(alphas)
+    zs = z0 + nppf(alphas).reshape(alphas.shape+(1,)*z0.ndim)
+    
+    avals = ncdf(z0 + zs/(1-a*zs))*100
+    
+    n_p = len(p_opt)
+    
+    p_lower, p_median, p_upper = [np.zeros(n_p) for _ in range(3)]
+    
+    for p in range(n_p):
+        p_lower[p] = np.percentile(bootstrap_params[:,p],avals[0,p])
+        p_median[p] = np.percentile(bootstrap_params[:,p],50)
+        p_upper[p] = np.percentile(bootstrap_params[:,p],avals[1,p])
+
+    return pd.DataFrame(data = [p_lower,p_median,p_upper],
+                        index = ('{:}% CI Lower Limit'.format(CI),'Median Value','{:}% CI Upper Limit'.format(CI)),
+                        columns = names)
