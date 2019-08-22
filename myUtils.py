@@ -290,10 +290,15 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_k
         
     return fig, axs_, mode
 
-def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names = None):
+def bootstrap_bca(func, x, y, bootstrap_params, p_opt, CI=95,
+                  names = None, sklearn = False, def_params = None):
     from scipy.special import erfinv
     from scipy.special import erf
     import warnings
+
+    if def_params is None and sklearn:
+        warnings.warn("def_params function must be defined for sklearn model")
+        return
 
     def norm_cdf(x):
         return 0.5*(1+erf(x/2**0.5))
@@ -311,37 +316,45 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names
         base = np.arange(0,len(data))
         return (np.delete(base,i) for i in base)
     
-    z0 = norm_ppf( ( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  ) / straps )
+    straps,n_p = bootstrap_params.shape
+    
+    
+    z0 = norm_ppf( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  / straps )
     
     idx_jack = jackknife(y)
-    p_jack = np.array([opt.curve_fit(func,x[idx],y[idx])[0] for idx in idx_jack])
+    if not sklearn:
+        p_jack = np.array([opt.curve_fit(func,x[idx],y[idx])[0] for idx in idx_jack])
+    else:
+        p_jack = np.array([def_params(func.fit(x[idx],y[idx])) for idx in idx_jack])
     p_jmean = np.mean(p_jack,axis=0)
+    
     
     # Acceleration value
     a = np.sum((p_jmean - p_jack)**3, axis=0) / (
         6.0 * np.sum((p_jmean - p_jack)**2, axis=0)**1.5)
     
     alphas = np.array([100-CI,100+CI])/200.
+    
     zs = z0 + norm_ppf(alphas)[:,np.newaxis]
     
     avals = norm_cdf(z0 + zs/(1-a*zs))*100
     
-    nvals = np.round((straps-1)*avals)
+    nvals = np.round((straps-1)*avals/100)
     
-    if np.any(np.isnan(nvals)):
+    if np.any(np.isnan(avals)):
         warnings.warn("Some values were NaN; results are probably unstable " +
                       "(all values were probably equal)",
                       stacklevel=2)
+        return
     if np.any(nvals == 0) or np.any(nvals == straps-1):
         warnings.warn("Some values used extremal samples; " +
                       "results are probably unstable.",
                       stacklevel=2)
+        return
     elif np.any(nvals < 10) or np.any(nvals >= straps-10):
         warnings.warn("Some values used top 10 low/high samples; " +
                       "results may be unstable.",
                       stacklevel=2)
-    
-    n_p = len(p_opt)
     
     p_lower, p_median, p_upper = [np.zeros(n_p) for _ in range(3)]
     
