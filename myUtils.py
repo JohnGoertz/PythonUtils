@@ -293,11 +293,12 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_k
 def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names = None):
     from scipy.special import erfinv
     from scipy.special import erf
+    import warnings
 
-    def ncdf(x):
+    def norm_cdf(x):
         return 0.5*(1+erf(x/2**0.5))
     
-    def nppf(x):
+    def norm_ppf(x):
         return 2**0.5 * erfinv(2*x-1)
     
     def jackknife(data):
@@ -310,7 +311,7 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names
         base = np.arange(0,len(data))
         return (np.delete(base,i) for i in base)
     
-    z0 = nppf( ( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  ) / straps )
+    z0 = norm_ppf( ( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  ) / straps )
     
     idx_jack = jackknife(y)
     p_jack = np.array([opt.curve_fit(func,x[idx],y[idx])[0] for idx in idx_jack])
@@ -321,10 +322,24 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names
         6.0 * np.sum((p_jmean - p_jack)**2, axis=0)**1.5)
     
     alphas = np.array([100-CI,100+CI])/200.
-    print(alphas)
-    zs = z0 + nppf(alphas).reshape(alphas.shape+(1,)*z0.ndim)
+    zs = z0 + norm_ppf(alphas)[:,np.newaxis]
     
-    avals = ncdf(z0 + zs/(1-a*zs))*100
+    avals = norm_cdf(z0 + zs/(1-a*zs))*100
+    
+    nvals = np.round((straps-1)*avals)
+    
+    if np.any(np.isnan(nvals)):
+        warnings.warn("Some values were NaN; results are probably unstable " +
+                      "(all values were probably equal)",
+                      stacklevel=2)
+    if np.any(nvals == 0) or np.any(nvals == straps-1):
+        warnings.warn("Some values used extremal samples; " +
+                      "results are probably unstable.",
+                      stacklevel=2)
+    elif np.any(nvals < 10) or np.any(nvals >= straps-10):
+        warnings.warn("Some values used top 10 low/high samples; " +
+                      "results may be unstable.",
+                      stacklevel=2)
     
     n_p = len(p_opt)
     
@@ -334,7 +349,11 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, straps=1000, CI=95, names
         p_lower[p] = np.percentile(bootstrap_params[:,p],avals[0,p])
         p_median[p] = np.percentile(bootstrap_params[:,p],50)
         p_upper[p] = np.percentile(bootstrap_params[:,p],avals[1,p])
-
-    return pd.DataFrame(data = [p_lower,p_median,p_upper],
-                        index = ('{:}% CI Lower Limit'.format(CI),'Median Value','{:}% CI Upper Limit'.format(CI)),
+        
+    summary = pd.DataFrame(data = [p_lower,p_median,p_upper],
+                        index = ('CI Lower Limit'.format(CI),
+                                 'Median Value',
+                                 'CI Upper Limit'.format(CI)),
                         columns = names)
+    
+    return summary, avals
