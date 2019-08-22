@@ -7,7 +7,10 @@ import datetime #For timestamping files
 import pathlib as pl
 import shelve #For saving/loading variables
 import os
-
+from tqdm import tqdm
+import scipy.stats as stats
+import scipy.optimize as opt
+import numpy.random as rnd
 
 def plotSettings():
     plt.style.use('seaborn-poster')
@@ -117,28 +120,69 @@ def classical_fit_param_summary(p_opt,p_cov, names = None):
 
 # Performing the bootstrap algorithm
 def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, guess_gen = None,
-                 fit_kws = {}, conservative = True, piecewise = True, sample = 'residuals'):
+                 fit_kws = {}, parametric = False, piecewise = True, bayes = True):
     # If y is a vector of length 'm', x must also be a vector of length 'm'
     # If y is a matrix of shape 'm x n', with replicates in different columns, x must either be a vector of length 'm' or a matrix of shape 'm x n'
 
+    # Resampling approaches:
+    def pw_not_pm(data):
+        m,n = data.shape
+        invalid_sample = True
+        while invalid_sample:
+            resamples = np.array([rnd.choice(data[row],size = n) for row in range(m)])
+            if all(len(set(resamples[row])) > 1 for row in range(n)): invalid_sample = False
+        return resamples
+    def pw_and_pm(data):
+        m,n = data.shape
+        sigma = [data[row].std() for row in range(m)]
+        return np.array([rnd.normal(0, sigma[row], size = n) for row in range(m)])
+    def pm_not_pw(data):
+        sigma = data.std()
+        return rnd.normal(0, sigma, size = data.shape)
+    def not_pm_nor_pw(data):
+        return rnd.choice(data.flat, size = data.shape)    
+    
+    def resample(data, piecewise, parametric):
+        return {(True,False)  : pw_not_pm,
+                (True,True)   : pw_and_pm,
+                (False,True)  : pm_not_pw,
+                (False,False) : not_pm_nor_pw}[piecewise, parametric](data)
+        
     # Number of unique x values
     n = len(set(x))
 
     # Number of replicates
     m = y.size//n
 
-    # Piecewise bootstrapping is nonsensical if there's only one y per x
-    if y.ndim == 1: piecewise = False
+    
+    if y.ndim == 1:
+        # Piecewise bootstrapping is nonsensical if there's only one y per x
+        piecewise = False
+    elif x.ndim == 1:
+        # If x is 1D while y is not, tile it so it is then flatten
+        x = np.tile(x,[m,1]).T.flatten()
+    else:
+        # If both are 2D, flatten x
+        x = x.flatten()
+    # Always flatten y, just in case
+    y = y.flatten()
 
     # Generate points at which to evaluate the curves
     if xpts is None: xpts = np.linspace(x.min(),x.max(),res)
     elif xpts.size == 2: xpts = np.linspace(xpts[0],xpts[1],res)
 
-    # Predicted y values
+    if guess_gen is not None:
+        # Generate guesses for this dataset
+        guesses = guess_gen(x,y)
+    else:
+        # Default guesses
+        guesses = np.ones(len(p_opt))
+        
+    # Predict y values
+    p_opt, _ = opt.curve_fit(func, x, y,
+                             p0 = guesses,
+                             **fit_kws) 
     y_fit = func(x,*p_opt)
-
-    # Tile the predicted y values if necessary so that they're the same shape as the original data
-    if y_fit.shape != y.shape: y_fit = np.tile(y_fit,[y.size//x.size,1]).T
 
     # Get the residuals
     resid = y - y_fit
@@ -147,45 +191,42 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
     curve_strapped = np.zeros([n_straps,xpts.size]) # Another matrix to store the predicted curve for each iteration
 
     for i in tqdm(range(n_straps)):
+        valid_fit = False
+        while valid_fit is False:
+            if not bayes:
+                # Choose new residuals based on the specified method
+                resid_resamples = resample(resid, piecewise, parametric)
         
-        # Choose new residuals based on the specified method
-        if piecewise and conservative:
-            invalid_sample = True
-            while invalid_sample:
-                resid_resamples = np.array([np.random.choice(resid[row],size = m) for row in range(n)])
-                if all(len(set(resid_resamples[row])) > 1 for row in range(n)): invalid_sample = False
-
-        elif piecewise and not conservative:
-            sigma_resid = [resid[row].std() for row in range(n)]
-            resid_resamples = np.array([np.random.normal(0, size = m) for row in range(n)])
-        elif not piecewise and not conservative:
-            sigma_resid = resid.std()
-            resid_resamples = np.random.normal(0, sigma_resid, size = resid.shape)
-
-        elif not piecewise and conservative:
-            resid_resamples = np.random.choice(resid.flat, size = resid.shape)
-
-        # Generate a synthetic dataset from the sampled residuals
-        new_y = y_fit+resid_resamples
-
-        if guess_gen is not None:
-            # Generate guesses for this dataset
-            guesses = guess_gen(x,new_y)
-        else:
-            # Default guesses
-            guesses = np.ones(len(p_opt))
-
-        # Additional keyword arguments to curve_fit can be passed as a dictionary via fit_kws
-        if y.ndim == 1:
-            p_strapped[i], _ = opt.curve_fit(func, x, new_y,
-                                             p0 = guesses,
-                                             **fit_kws)
-        else:
-            p_strapped[i], _ = opt.curve_fit(func, x, new_y.mean(1),
-                                             sigma = new_y.std(1), absolute_sigma = True,
-                                             p0 = guesses,
-                                             **fit_kws)
+                # Generate a synthetic dataset from the sampled residuals
+                new_y = y_fit+resid_resamples
         
+                if guess_gen is not None:
+                    # Generate guesses for this dataset
+                    guesses = guess_gen(x,new_y)
+                else:
+                    # Default guesses
+                    guesses = np.ones(len(p_opt))
+        
+                # Additional keyword arguments to curve_fit can be passed as a dictionary via fit_kws
+                try:
+                    p_strapped[i], _ = opt.curve_fit(func, x, new_y,
+                                                     p0 = guesses,
+                                                     **fit_kws)
+                except RuntimeError: continue
+                else: valid_fit = True
+                
+            else:
+                # For a Bayesian flavor, give weights to each data point drawn from a gamma-distributed prior
+                wts = rnd.gamma(1,1,size = y.size)
+                wts /= sum(wts)
+                try:
+                    p_strapped[i], _ = opt.curve_fit(func, x, y,
+                                                     p0 = guesses,
+                                                     sigma = 1/wts,
+                                                     **fit_kws)    
+                except RuntimeError: continue
+                else: valid_fit = True        
+            
         curve_strapped[i] = func(xpts,*p_strapped[i])
 
     return p_strapped, curve_strapped
@@ -215,7 +256,7 @@ def bootstrap_summary(bootstrap_params, CI = 95, names = None):
 
 # Plot the bootstrapped distributions for each parameter and label with the modal value derived from its KDE
 def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_kws = {}, kde_kws = {}, axs = None,
-                   show_median = True, show_CI = True):
+                   show_median = True, show_CI = True, show_mode = True):
     _,n_p = bootstrap_params.shape
     mode = np.zeros([n_p,])
     
@@ -239,7 +280,7 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_k
         KDE = axs_[p].lines[0]
 
         mode[p] = KDE.get_xdata()[np.argmax(KDE.get_ydata())]
-        if axs is None:
+        if show_mode:
             axs_[p].set_title(names[p] + '\n' + 'mode = {:.3f}'.format(mode[p]))
         else:
             axs_[p].set_title(names[p])
