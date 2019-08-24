@@ -153,7 +153,6 @@ def bootstrap_fits(func, x, y, p_opt, n_straps = 1000, res = 100, xpts = None, g
 
     # Number of replicates
     m = y.size//n
-
     
     if y.ndim == 1:
         # Piecewise bootstrapping is nonsensical if there's only one y per x
@@ -290,15 +289,11 @@ def bootstrap_dists(bootstrap_params, CI = 95, names = None, plt_kws = {}, rug_k
         
     return fig, axs_, mode
 
-def bootstrap_bca(func, x, y, bootstrap_params, p_opt, CI=95,
-                  names = None, sklearn = False, def_params = None):
+    
+def bootstrap_bca(func, x, y, bootstrap_params, CI=95, names = None, guess_gen = None, fit_kwargs = {}):
     from scipy.special import erfinv
     from scipy.special import erf
     import warnings
-
-    if def_params is None and sklearn:
-        warnings.warn("def_params function must be defined for sklearn model")
-        return
 
     def norm_cdf(x):
         return 0.5*(1+erf(x/2**0.5))
@@ -316,16 +311,22 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, CI=95,
         base = np.arange(0,len(data))
         return (np.delete(base,i) for i in base)
     
+    x = x.flatten()
+    y = y.flatten()
+    
     straps,n_p = bootstrap_params.shape
     
+    if guess_gen is not None:
+        guesses = guess_gen(x,y)
+    else:
+        guesses = None
+    
+    p_opt,_ = opt.curve_fit(func,x,y, p0=guesses, **fit_kwargs)
     
     z0 = norm_ppf( 1.0*np.sum(bootstrap_params < p_opt, axis=0)  / straps )
     
     idx_jack = jackknife(y)
-    if not sklearn:
-        p_jack = np.array([opt.curve_fit(func,x[idx],y[idx])[0] for idx in idx_jack])
-    else:
-        p_jack = np.array([def_params(func.fit(x[idx],y[idx])) for idx in idx_jack])
+    p_jack = np.array([opt.curve_fit(func,x[idx],y[idx], p0=guesses, **fit_kwargs)[0] for idx in idx_jack])
     p_jmean = np.mean(p_jack,axis=0)
     
     
@@ -337,9 +338,9 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, CI=95,
     
     zs = z0 + norm_ppf(alphas)[:,np.newaxis]
     
-    avals = norm_cdf(z0 + zs/(1-a*zs))*100
+    avals = norm_cdf(z0 + zs/(1-a*zs))
     
-    nvals = np.round((straps-1)*avals/100)
+    nvals = np.round((straps-1)*avals)
     
     if np.any(np.isnan(avals)):
         warnings.warn("Some values were NaN; results are probably unstable " +
@@ -358,15 +359,17 @@ def bootstrap_bca(func, x, y, bootstrap_params, p_opt, CI=95,
     
     p_lower, p_median, p_upper = [np.zeros(n_p) for _ in range(3)]
     
+    avals *= 100
+    
     for p in range(n_p):
         p_lower[p] = np.percentile(bootstrap_params[:,p],avals[0,p])
         p_median[p] = np.percentile(bootstrap_params[:,p],50)
         p_upper[p] = np.percentile(bootstrap_params[:,p],avals[1,p])
         
     summary = pd.DataFrame(data = [p_lower,p_median,p_upper],
-                        index = ('CI Lower Limit'.format(CI),
+                        index = ('{:}% CI Lower Limit'.format(CI),
                                  'Median Value',
-                                 'CI Upper Limit'.format(CI)),
+                                 '{:}% CI Upper Limit'.format(CI)),
                         columns = names)
     
     return summary, avals
