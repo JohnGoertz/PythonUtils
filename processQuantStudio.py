@@ -10,27 +10,57 @@ from . import myUtils as mypy
 ###############################################################################
 #%% Import Data
 
-def importQuantStudio(data_pth, data_file, targets, quantities, n_r):
-    setup = pd.read_excel(data_pth / data_file,
-                         sheet_name='Sample Setup', header = 42)
+def importQuantStudio(data_pth, data_file, *,
+                      header = None, debug = False):
+    if header is None: header = 42
+    
+    try:
+        setup = pd.read_excel(data_pth / data_file,
+                             sheet_name = 'Sample Setup', header = header)
+    except PermissionError as e:
+        print('Permission Denied. The file may be open; close the file and try again.')
+        return print(e)
+    wells = setup[~setup['Target Name'].isna()].Well
+    
+    raw = pd.read_excel(data_pth / data_file,
+                         sheet_name = 'Raw Data', header = header)
+
     data = pd.read_excel(data_pth / data_file,
-                         sheet_name='Amplification Data', header = 42)
+                         sheet_name = 'Amplification Data', header = header)
+    
     instr_results = pd.read_excel(data_pth / data_file,
-                         sheet_name='Results', header = 42)
-    instr_results.set_index('Well',inplace=True)
+                         sheet_name = 'Results', header = header)
+    
+    if debug: display(instr_results)
     instr_results.CT.mask(instr_results.CT == 'Undetermined',np.nan,inplace=True)
     
+    imps = {'setup'         : setup,
+            'raw'           : raw,
+            'data'          : data,
+            'instr_results' : instr_results}
+    
+    for df in imps.values():
+        df.columns = df.columns.str.replace(' ', '')
+        df = df[df.Well.isin(wells)]
+    
+    return imps
+    
+def reshapeQS_SNX(targets, n_r, *, quantities = None,
+                  setup = None, raw = None, data = None, instr_results = None):
+    
     #Number of cycles (n_c) and array of cycle numbers (c)
-    n_c = np.sum(data.Well == 1).item()    #convert numpy dtype to native int
-    c = np.arange(n_c)+1
+    c = mypy.uniq(data.Cycle)
+    n_c = c.size
     
     #Number of targets
     n_t = len(targets)
     
     #Number of quantities (n_q) and logged quantities (lg_q)
+    if quantities is None:
+        quantities = mypy.uniq(setup.Quantity[setup.TargetName.isin(targets)])
     n_q = len(quantities)
-    lg_q = np.log10(quantities)
     
+    n_c = len(c)
     well_map, ct_instr,thresh_instr = [np.zeros([n_t,n_q,n_r]) for _ in range(3)]
     Rn, dRn = [np.zeros([n_t,n_q,n_r,n_c]) for _ in range(2)]
     
@@ -40,25 +70,102 @@ def importQuantStudio(data_pth, data_file, targets, quantities, n_r):
     #   Dim3 -> replicates
     #   Dim4 -> cycle data
     for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        setup_mask = (setup['Target Name'] == targets[i]) & (setup['Quantity'] == quantities[j])
-        well_map[i,j,k] = setup['Well'][setup_mask].iloc[k]
+        setup_mask = (setup.TargetName == targets[i]) & (setup.Quantity == quantities[j])
+        assert sum(setup_mask) == n_r
         
-        data_mask = (data['Well'] == well_map[i,j,k])
-        Rn[i,j,k,:] = data['Rn'][data_mask]
-        dRn[i,j,k,:] = data['Delta Rn'][data_mask]
+        well_map[i,j,k] = setup.Well[setup_mask].iloc[k]
         
-        ct_instr[i,j,k] = instr_results.loc[well_map[i,j,k]].CT
-        thresh_instr[i,j,k] = instr_results.loc[well_map[i,j,k]]['Ct Threshold']
+        data_mask = (data.Well == well_map[i,j,k]) & (data.TargetName == targets[i])
+        assert sum(data_mask) == n_c
+        
+        Rn[i,j,k,:] = data.Rn[data_mask]
+        dRn[i,j,k,:] = data.DeltaRn[data_mask]
+        
+        result = instr_results[(instr_results.Well == well_map[i,j,k]) &
+                               (instr_results.TargetName == targets[i])]
+        ct_instr[i,j,k] = result.CT
+        thresh_instr[i,j,k] = result.CtThreshold
         
     return {'c'             : c,
             'n_t'           : n_t,
             'n_q'           : n_q,
-            'lg_q'          : lg_q,
+            'lg_q'          : np.log10(quantities),
             'well_map'      : well_map,
             'dRn'           : dRn,
             'ct_instr'      : ct_instr,
             'thresh_instr'  : thresh_instr}
 
+
+def reshapeQS_MUX(targets, fluors, n_r, *,
+                  setup = None, raw = None, data = None, instr_results = None):
+    
+    #Number of cycles (n_c) and array of cycle numbers (c)
+    c = mypy.uniq(data.Cycle)
+    n_c = c.size
+    
+    #Number of targets
+    n_t = len(targets)
+    
+    #Number of fluorophores
+    n_f = len(fluors)
+    
+    n_c = len(c)
+    
+    # Rearrange data into multi-dimensional matrix
+    #   Dim1 -> targets
+    #   Dim2 -> concentrations
+    #   Dim3 -> replicates
+    #   Dim4 -> fluorophore
+    #   Dim5 -> cycle data
+    
+    # Use the quantities in the first fluorophore listed to map the wells to the array
+    #Number of quantities (n_q)
+    q_mask = (setup.TargetName.str.contains(targets[0], regex = False)) & \
+             (setup.TargetName.str.contains(fluors[0], regex = False))
+    quantities = np.sort(mypy.uniq(setup.Quantity[q_mask]))
+    n_q = len(quantities)
+    
+    well_map = np.zeros([n_t,n_q,n_r])
+    
+    for (t,q,r) in np.ndindex(n_t,n_q,n_r):
+        setup_mask = (setup.TargetName.str.contains(targets[t], regex = False)) & \
+                     (setup.TargetName.str.contains(fluors[0], regex = False)) & \
+                     (setup.Quantity == quantities[q])
+        assert sum(setup_mask) == n_r
+        
+        well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+    
+    q_map, ct_instr, thresh_instr = [np.zeros([n_t,n_q,n_r,n_f]) for _ in range(3)]
+    Rn, dRn = [np.zeros([n_t,n_q,n_r,n_f,n_c]) for _ in range(2)]
+    
+    for (t,q,r,f) in np.ndindex(n_t,n_q,n_r,n_f):
+        quant = mypy.uniq(setup.Quantity[
+                (setup.Well == well_map[t,q,r]) & 
+                (setup.TargetName.str.contains(fluors[f]))
+                ])
+        assert len(quant) == 1, 'Quantity is not unique'
+        q_map[t,q,r,f] = quant[0]
+        data_mask = (data.Well == well_map[t,q,r]) & \
+                (data.TargetName.str.contains(fluors[f]))
+        assert sum(data_mask) == n_c
+        
+        Rn[t,q,r,f,:] = data.Rn[data_mask]
+        dRn[t,q,r,f,:] = data.DeltaRn[data_mask]
+        
+        result = instr_results[(instr_results.Well == well_map[t,q,r]) &
+                               (instr_results.TargetName.str.contains(fluors[f]))]
+        ct_instr[t,q,r,f] = result.CT
+        thresh_instr[t,q,r,f] = result.CtThreshold
+        
+    return {'c'             : c,
+            'n_t'           : n_t,
+            'n_q'           : n_q,
+            'lg_q'          : np.log10(quantities),
+            'well_map'      : well_map,
+            'q_map'         : q_map,
+            'dRn'           : dRn,
+            'ct_instr'      : ct_instr,
+            'thresh_instr'  : thresh_instr}
 
 ###############################################################################
 #%% Calculate CTs from thresholds
