@@ -84,7 +84,16 @@ def savemyfig(fig_obj, title, path = pl.Path.cwd()):
     print('Done')
     return
 
+def uniq(vals):
+    return np.array(list(set(vals)))
 
+def sp_xlabel(text, pad = 0, fig = None, text_kw = {}):
+    if fig is None: fig = plt.gcf()
+    fig.text(0.5, 0.0+pad, text, ha='center', va='center',**text_kw)
+    
+def sp_ylabel(text, pad = 0, fig = None, text_kw = {}):
+    if fig is None: fig = plt.gcf()
+    fig.text(0.0+pad, 0.5, text, ha='center', va='center', rotation='vertical',**text_kw)
 ############################################################################################################
 # From 01: Plotting data, uncertainty, curve fits
 def classical_fit_intervals(func,p_opt,x,y,xpts):
