@@ -12,13 +12,15 @@ import scipy.stats as stats
 import scipy.optimize as opt
 import numpy.random as rnd
 
-def plotSettings():
-    plt.style.use('seaborn-poster')
-
+def plotSettings(env = 'spyder'):
+    if env.lower() == 'spyder':
+        plt.style.use('seaborn-poster')
+    elif env.lower() in ('jupyter','notebook'):
+        plt.style.use('seaborn-notebook')
+    
+    mpl.rcParams['font.size'] = '20'
     mpl.rcParams['axes.linewidth'] = 2
     mpl.rcParams['patch.linewidth'] = 2
-
-    mpl.rcParams['font.size'] = '20'
     mpl.rcParams['figure.titlesize'] = 'large'
     mpl.rcParams['figure.titleweight'] = 'bold'
     mpl.rcParams['axes.labelsize'] = 'medium'
