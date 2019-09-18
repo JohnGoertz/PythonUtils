@@ -12,13 +12,15 @@ import scipy.stats as stats
 import scipy.optimize as opt
 import numpy.random as rnd
 
-def plotSettings():
-    plt.style.use('seaborn-poster')
-
+def plotSettings(env = 'spyder'):
+    if env.lower() == 'spyder':
+        plt.style.use('seaborn-poster')
+    elif env.lower() in ('jupyter','notebook'):
+        plt.style.use('seaborn-notebook')
+    
+    mpl.rcParams['font.size'] = '20'
     mpl.rcParams['axes.linewidth'] = 2
     mpl.rcParams['patch.linewidth'] = 2
-
-    mpl.rcParams['font.size'] = '20'
     mpl.rcParams['figure.titlesize'] = 'large'
     mpl.rcParams['figure.titleweight'] = 'bold'
     mpl.rcParams['axes.labelsize'] = 'medium'
@@ -84,7 +86,16 @@ def savemyfig(fig_obj, title, path = pl.Path.cwd()):
     print('Done')
     return
 
+def uniq(vals):
+    return np.array(list(set(vals)))
 
+def sp_xlabel(text, pad = 0, fig = None, text_kw = {}):
+    if fig is None: fig = plt.gcf()
+    fig.text(0.5, 0.0+pad, text, ha='center', va='center',**text_kw)
+    
+def sp_ylabel(text, pad = 0, fig = None, text_kw = {}):
+    if fig is None: fig = plt.gcf()
+    fig.text(0.0+pad, 0.5, text, ha='center', va='center', rotation='vertical',**text_kw)
 ############################################################################################################
 # From 01: Plotting data, uncertainty, curve fits
 def classical_fit_intervals(func,p_opt,x,y,xpts):

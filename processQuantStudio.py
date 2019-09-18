@@ -10,27 +10,57 @@ from . import myUtils as mypy
 ###############################################################################
 #%% Import Data
 
-def importQuantStudio(data_pth, data_file, targets, quantities, n_r):
-    setup = pd.read_excel(data_pth / data_file,
-                         sheet_name='Sample Setup', header = 42)
+def importQuantStudio(data_pth, data_file, *,
+                      header = None, debug = False):
+    if header is None: header = 42
+    
+    try:
+        setup = pd.read_excel(data_pth / data_file,
+                             sheet_name = 'Sample Setup', header = header)
+    except PermissionError as e:
+        print('Permission Denied. The file may be open; close the file and try again.')
+        return print(e)
+    wells = setup[~setup['Target Name'].isna()].Well
+    
+    raw = pd.read_excel(data_pth / data_file,
+                         sheet_name = 'Raw Data', header = header)
+
     data = pd.read_excel(data_pth / data_file,
-                         sheet_name='Amplification Data', header = 42)
+                         sheet_name = 'Amplification Data', header = header)
+    
     instr_results = pd.read_excel(data_pth / data_file,
-                         sheet_name='Results', header = 42)
-    instr_results.set_index('Well',inplace=True)
+                         sheet_name = 'Results', header = header)
+    
+    if debug: display(instr_results)
     instr_results.CT.mask(instr_results.CT == 'Undetermined',np.nan,inplace=True)
     
+    imps = {'setup'         : setup,
+            'raw'           : raw,
+            'data'          : data,
+            'instr_results' : instr_results}
+    
+    for df in imps.values():
+        df.columns = df.columns.str.replace(' ', '')
+        df = df[df.Well.isin(wells)]
+    
+    return imps
+    
+def reshapeQS_SNX(targets, n_r, *, quantities = None,
+                  setup = None, raw = None, data = None, instr_results = None):
+    
     #Number of cycles (n_c) and array of cycle numbers (c)
-    n_c = np.sum(data.Well == 1).item()    #convert numpy dtype to native int
-    c = np.arange(n_c)+1
+    c = mypy.uniq(data.Cycle)
+    n_c = c.size
     
     #Number of targets
     n_t = len(targets)
     
     #Number of quantities (n_q) and logged quantities (lg_q)
+    if quantities is None:
+        quantities = mypy.uniq(setup.Quantity[setup.TargetName.isin(targets)])
     n_q = len(quantities)
-    lg_q = np.log10(quantities)
     
+    n_c = len(c)
     well_map, ct_instr,thresh_instr = [np.zeros([n_t,n_q,n_r]) for _ in range(3)]
     Rn, dRn = [np.zeros([n_t,n_q,n_r,n_c]) for _ in range(2)]
     
@@ -40,25 +70,103 @@ def importQuantStudio(data_pth, data_file, targets, quantities, n_r):
     #   Dim3 -> replicates
     #   Dim4 -> cycle data
     for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        setup_mask = (setup['Target Name'] == targets[i]) & (setup['Quantity'] == quantities[j])
-        well_map[i,j,k] = setup['Well'][setup_mask].iloc[k]
+        setup_mask = (setup.TargetName == targets[i]) & (setup.Quantity == quantities[j])
+        assert sum(setup_mask) == n_r
         
-        data_mask = (data['Well'] == well_map[i,j,k])
-        Rn[i,j,k,:] = data['Rn'][data_mask]
-        dRn[i,j,k,:] = data['Delta Rn'][data_mask]
+        well_map[i,j,k] = setup.Well[setup_mask].iloc[k]
         
-        ct_instr[i,j,k] = instr_results.loc[well_map[i,j,k]].CT
-        thresh_instr[i,j,k] = instr_results.loc[well_map[i,j,k]]['Ct Threshold']
+        data_mask = (data.Well == well_map[i,j,k]) & (data.TargetName == targets[i])
+        assert sum(data_mask) == n_c
+        
+        Rn[i,j,k,:] = data.Rn[data_mask]
+        dRn[i,j,k,:] = data.DeltaRn[data_mask]
+        
+        result = instr_results[(instr_results.Well == well_map[i,j,k]) &
+                               (instr_results.TargetName == targets[i])]
+        ct_instr[i,j,k] = result.CT
+        thresh_instr[i,j,k] = result.CtThreshold
         
     return {'c'             : c,
             'n_t'           : n_t,
             'n_q'           : n_q,
-            'lg_q'          : lg_q,
+            'lg_q'          : np.log10(quantities),
             'well_map'      : well_map,
             'dRn'           : dRn,
             'ct_instr'      : ct_instr,
             'thresh_instr'  : thresh_instr}
 
+
+def reshapeQS_MUX(targets, fluors, n_r, *,
+                  setup = None, raw = None, data = None, instr_results = None):
+    
+    #Number of cycles (n_c) and array of cycle numbers (c)
+    c = mypy.uniq(data.Cycle)
+    n_c = c.size
+    
+    #Number of targets
+    n_t = len(targets)
+    
+    #Number of fluorophores
+    n_f = len(fluors)
+    
+    n_c = len(c)
+    
+    # Rearrange data into multi-dimensional matrix
+    #   Dim1 -> targets
+    #   Dim2 -> concentrations
+    #   Dim3 -> replicates
+    #   Dim4 -> fluorophore
+    #   Dim5 -> cycle data
+    
+    # Use the quantities in the first fluorophore listed to map the wells to the array
+    #Number of quantities (n_q)
+    q_mask = (setup.TargetName.str.contains(targets[0], regex = False)) & \
+             (setup.TargetName.str.contains(fluors[0], regex = False))
+    quantities = np.sort(mypy.uniq(setup.Quantity[q_mask]))
+    n_q = len(quantities)
+    
+    well_map = np.zeros([n_t,n_q,n_r])
+    
+    for (t,q,r) in np.ndindex(n_t,n_q,n_r):
+        setup_mask = (setup.TargetName.str.contains(targets[t], regex = False)) & \
+                     (setup.TargetName.str.contains(fluors[0], regex = False)) & \
+                     (setup.Quantity == quantities[q])
+        assert sum(setup_mask) == n_r
+        
+        well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+    
+    q_map, ct_instr, thresh_instr = [np.zeros([n_t,n_q,n_r,n_f]) for _ in range(3)]
+    Rn, dRn = [np.zeros([n_t,n_q,n_r,n_f,n_c]) for _ in range(2)]
+    
+    for (t,q,r,f) in np.ndindex(n_t,n_q,n_r,n_f):
+        quant = mypy.uniq(setup.Quantity[
+                (setup.Well == well_map[t,q,r]) & 
+                (setup.TargetName.str.contains(fluors[f]))
+                ])
+        assert len(quant) == 1, 'Quantity is not unique'
+        q_map[t,q,r,f] = quant[0]
+        data_mask = (data.Well == well_map[t,q,r]) & \
+                (data.TargetName.str.contains(fluors[f]))
+        assert sum(data_mask) == n_c
+        
+        Rn[t,q,r,f,:] = data.Rn[data_mask]
+        dRn[t,q,r,f,:] = data.DeltaRn[data_mask]
+        
+        result = instr_results[(instr_results.Well == well_map[t,q,r]) &
+                               (instr_results.TargetName.str.contains(fluors[f]))]
+        ct_instr[t,q,r,f] = result.CT
+        thresh_instr[t,q,r,f] = result.CtThreshold
+        
+    return {'c'             : c,
+            'n_t'           : n_t,
+            'n_q'           : n_q,
+            'n_f'           : n_f,
+            'lg_q'          : np.log10(quantities),
+            'well_map'      : well_map,
+            'q_map'         : q_map,
+            'dRn'           : dRn,
+            'ct_instr'      : ct_instr,
+            'thresh_instr'  : thresh_instr}
 
 ###############################################################################
 #%% Calculate CTs from thresholds
@@ -91,8 +199,8 @@ def setupOverlay(targets, quantities, t_map = None, q_colors = None):
                  figsize = [20,8])
     if t_map is not None:
         #Use the coordinates specified in t_map
-        n_rows, n_cols = max(t_map.values())
-        gs = fig.add_gridspec(n_rows+1,n_cols+1)
+        nrows, ncols = max(t_map.values())
+        gs = fig.add_gridspec(nrows+1,ncols+1)
         gs_map = {t:gs[coord] for (t,coord) in t_map.items()}
     else:
         #Make the GridSpec layout as square as possible
@@ -101,15 +209,15 @@ def setupOverlay(targets, quantities, t_map = None, q_colors = None):
             sq = (n_t_)**0.5
             nrows = int(sq)
             ncols = n_t_//nrows + int(n_t_ % nrows != 0)
-        elif n_t_ < 4:
+        elif n_t_ <= 4:
             ncols = n_t_
             nrows = 1
         else:
             ncols = 5
             nrows = n_t_//ncols + int(n_t_ % ncols != 0)
-        gs = fig.add_gridspec(n_rows,n_cols)
+        gs = fig.add_gridspec(nrows,ncols)
         gs_map = {t:gs[i] for i,t in enumerate(targets)}
-        gs_map['legend'] = gs[n_t+1]
+        gs_map['legend'] = gs[n_t]
     
         # Plot with smaller x- and y-tick labels and axis labels
     with plt.rc_context({'axes.labelsize'  : 'small',
@@ -119,8 +227,8 @@ def setupOverlay(targets, quantities, t_map = None, q_colors = None):
         # Create axes for each target
         axs = {t:fig.add_subplot(gs_map[t]) for t in targets}
                     
-    
-    (axs[t].set_title(t) for t in targets)
+    with plt.rc_context({'axes.titlesize':'large'}):
+        for t in targets: axs[t].set_title(t)
     
     if q_colors is None:
         cmap_q = sns.color_palette('cubehelix',n_q+1)
@@ -129,12 +237,15 @@ def setupOverlay(targets, quantities, t_map = None, q_colors = None):
     ## Add legend in blank gridspec location
     # Add a subplot in the location
     axs['legend'] = fig.add_subplot(gs_map['legend'])
-    # plot dummy data with appropriate labels
-    for j,q in enumerate(quantities):
-        axs['legend'].plot(0,0, **q_colors[j], label='{:.0E}'.format(q))
-        
-    # Add legend then remove axes
-    axs['legend'].legend(loc = 'center', title = 'log10(Copies)')
+    # plot dummy data with appropriate labels, add legend, then remove axes
+    if type(quantities) is np.ndarray:
+        for j,q in enumerate(quantities):
+            axs['legend'].plot(0,0, **q_colors[j], label=f'{q:.1E}')
+        axs['legend'].legend(loc = 'center', title = 'log10(Copies)')
+    else:
+        for k,v in q_colors.items():
+            axs['legend'].plot(0,0, **v, label=k)
+        axs['legend'].legend(loc = 'center')
     axs['legend'].set_frame_on(False)
     axs['legend'].axes.get_xaxis().set_visible(False)
     axs['legend'].axes.get_yaxis().set_visible(False)
@@ -217,50 +328,58 @@ def plotBox(ax, x, E, dE, style = {}, label = None):
     ax.plot(x,E,'.',ms=20,**style, label = label)
     return
 
-def plotEfit(targets, lg_q, CTs, t_colors = None):
+def plotEfit(targets, lg_q, CTs, t_colors = None, style = 'absolute'):
     n_t, n_q, n_r = np.shape(CTs)
     target_stats = {t: calc_E(CTs[i,::],lg_q,n_r) for i,t in enumerate(targets)}
     
     # Overlay CT efficiency fits
-    fig_CT_eff_fits, ax_CT_eff_fits = plt.subplots()
+    fig_CT_eff, ax_CT_eff = plt.subplots(1,2, figsize = [12,4])
     
     if t_colors is None:
         t_colors = {t:{'color':'C{:}'.format(i)} for i,t in enumerate(targets)}
     
     for i,t in enumerate(targets):
         eff = target_stats[t]
-        ax_CT_eff_fits.plot(lg_q,CTs[i,::],
+        ax_CT_eff[0].plot(lg_q,CTs[i,::],
                         linestyle = 'none',
                         marker = '.',
                         **t_colors[t])
-        ax_CT_eff_fits.plot(lg_q,eff['intercept']+eff['slope']*lg_q,
+        ax_CT_eff[0].plot(lg_q,eff['intercept']+eff['slope']*lg_q,
                         **t_colors[t],
                         label = t)
-    ax_CT_eff_fits.legend()
-    plt.setp(ax_CT_eff_fits,**{
+    ax_CT_eff[0].legend()
+    plt.setp(ax_CT_eff[0],**{
             'xticks': lg_q,
             'title' : 'Competitor Efficiency fits to CTs',
             'xlabel': 'log$_{10}$ Copies',
             'ylabel': 'C$_{T}$'
             })
-      
-    fig_CT_effs, ax_CT_effs = plt.subplots()
-    for i,t in enumerate(targets):
-        plotBox(ax_CT_effs,i+1,target_stats[t]['E'],target_stats[t]['dE'],style = t_colors[t])    
     
-    plt.setp(ax_CT_effs,**{
+    if style.casefold() in ('%','percent'):
+        for v in target_stats.values():
+            v['E'] /= 2
+            v['dE'] /= 2
+        
+    for i,t in enumerate(targets):
+        plotBox(ax_CT_eff[1],i+1,target_stats[t]['E'],target_stats[t]['dE'],style = t_colors[t]) 
+        
+    if style.casefold() == 'absolute':
+        ax_CT_eff[1].set_ylim(0.95,3.05)
+        ax_CT_eff[1].set_ylabel('Efficiency (abs)')
+    elif style.casefold() in ('%','percent'):
+        ax_CT_eff[1].set_ylim(0.5,1.5)
+        ax_CT_eff[1].set_ylabel('Efficiency (%)')
+        
+    plt.setp(ax_CT_eff[1],**{
             'title'        : 'Target Efficiencies from CT Fits',
             'xlabel'       : 'Target',
-            'ylabel'       : 'Efficiency',
             'xlim'         : [0.5,n_t+0.5],
             'xticks'       : np.arange(n_t)+1,
             'xticklabels'  : targets
             })
-    return {'target_stats'      : target_stats,
-            'fig_CT_eff_fits'   : fig_CT_eff_fits,
-            'ax_CT_eff_fits'    : ax_CT_eff_fits,
-            'fig_CT_effs'       : fig_CT_effs,
-            'ax_CT_effs'        : ax_CT_effs}
+    return {'target_stats' : target_stats,
+            'fig_CT_eff'   : fig_CT_eff,
+            'ax_CT_eff'    : ax_CT_eff,}
     
 
 ###############################################################################
@@ -285,7 +404,7 @@ def E_BLM(F,a1,a2,a3,eta,chi,Fc):
     return chi + eta*np.log( np.exp( ( a1*(F-Fc)**2 + a2*(F-Fc) )/eta ) + np.exp( ( a3*(F-Fc) )/eta ) )
 
 def fitSigmoid(x,y): 
-    y = y - np.min(y) + 2#1e-10 # Zero data
+    y = y - np.min(y) + np.min(np.diff(y)) # Zero data
     
     F0_guess = y[0]
     Fmax_guess = y[-1]
@@ -430,7 +549,7 @@ def fit_all_curves(F):
     E0 = np.zeros([n_t,n_q,n_r])
     skip_Fit, is_4PLM, badLinFit, badBLMFit = [np.full([n_t,n_q,n_r], False, dtype = bool) for _ in range(4)]
     
-    skip_Fit[5,3:] = True
+    #skip_Fit[5,3:] = True
     
     E = F[...,1:]/F[...,:-1]
     ln2E = np.log( np.log(E) )
@@ -470,10 +589,10 @@ def fit_all_curves(F):
     
 ###############################################################################
 #%% Plot each curve 
-def plot_all_curves(F, targets, quantities, t_map,
+def plot_all_curves(F, targets, quantities,
                     sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts,
                     E, ln2E, E0, skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit,
-                    q_colors = None):
+                    q_colors = None, t_map = None):
     ## Set up plots for transformed efficiency vs fluorescence with different layers of information
     
     n_t, n_q, n_r, n_c = F.shape
@@ -574,8 +693,8 @@ def plot_all_curves(F, targets, quantities, t_map,
         extrap_c = c[:start_decline]
         axs_EvC_BLM[t].plot(extrap_c,np.exp( np.exp( E_BLM(extrap_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **extrap_style)
     
-    for f in EvC_figs: mypy.bigntight(f)
-    for f in ln2EvF_figs: mypy.bigntight(f)
+#    for f in EvC_figs: mypy.bigntight(f)
+#    for f in ln2EvF_figs: mypy.bigntight(f)
     
     return EvC_figs, EvC_axs, ln2EvF_figs, ln2EvF_axs
 
@@ -586,7 +705,11 @@ def plot_all_curves(F, targets, quantities, t_map,
 def focusTarget(focus_t, F, targets, quantities, 
                     sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts,
                     E, ln2E, E0, skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit,
-                    q_colors = None):
+                    q_colors = None, show_fit = ('BLM','LM','none')):
+    
+    blm = 'BLM' in show_fit
+    lm = 'LM' in show_fit
+    nf = 'none' in show_fit
     
     i = targets.index(focus_t)
     n_t, n_q, n_r, n_c = F.shape
@@ -597,22 +720,29 @@ def focusTarget(focus_t, F, targets, quantities,
         q_colors = {j:{'color' : cmap_q[j]} for j in range(n_q)}
     
     # Plot with smaller x- and y-tick labels and axis labels
+    focus_axs = list()
+    focus_figs = list()
     with plt.rc_context({'axes.labelsize'  : 'small',
                          'axes.labelweight': 'normal',
                          'xtick.labelsize' : 'small',
                          'ytick.labelsize' : 'small'}):
         
-        fig_focus_BLM, axs_focus_BLM = plt.subplots(1,3, figsize=[26,9])
-        fig_focus_LMs, axs_focus_LMs = plt.subplots(1,3, figsize=[26,9])
-        fig_focus_dots, axs_focus_dots = plt.subplots(1,3, figsize=[26,9])
-    fig_focus_dots.suptitle('{:s} focus\nPoints Only'.format(focus_t))
-    fig_focus_LMs.suptitle('{:s} focus\nLM Fits'.format(focus_t))
-    fig_focus_BLM.suptitle('{:s} focus\nBLM Fits'.format(focus_t))   
-    
-    focus_axs = [axs_focus_BLM, axs_focus_LMs, axs_focus_dots]
-    focus_figs = [fig_focus_BLM, fig_focus_LMs, fig_focus_dots]
-                              
-    
+        if blm:
+            fig_focus_BLM, axs_focus_BLM = plt.subplots(1,3, figsize=[26,9])
+            focus_axs.append(axs_focus_BLM)
+            focus_figs.append(fig_focus_BLM)
+        if lm:
+            fig_focus_LMs, axs_focus_LMs = plt.subplots(1,3, figsize=[26,9])
+            focus_axs.append(axs_focus_LMs)
+            focus_figs.append(fig_focus_LMs)
+        if nf:
+            fig_focus_dots, axs_focus_dots = plt.subplots(1,3, figsize=[26,9])
+            focus_axs.append(axs_focus_dots)
+            focus_figs.append(fig_focus_dots)
+    if blm: fig_focus_BLM.suptitle('{:s} focus\nBLM Fits'.format(focus_t))
+    if lm: fig_focus_LMs.suptitle('{:s} focus\nLM Fits'.format(focus_t))
+    if nf: fig_focus_dots.suptitle('{:s} focus\nPoints Only'.format(focus_t))   
+        
 
     dot_style = {'marker'   : '.',
                  'linestyle': 'None',
@@ -638,11 +768,18 @@ def focusTarget(focus_t, F, targets, quantities,
             axs[2].plot(c[stop_ground:-1], this_E[stop_ground:], **q_colors[j], **dot_style)
             
         # Overlay the sigmoidal fits
-        for ax in [axs_focus_LMs,axs_focus_BLM]:
+        if blm:
             if is_4PLM[i,j,k]:
-                p = ax[0].plot(c,logistic_4P(c,*sig_params[i,j,k,:-1]), **q_colors[j], **fit_style)
+                p = axs_focus_BLM[0].plot(c,logistic_4P(c,*sig_params[i,j,k,:-1]), **q_colors[j], **fit_style)
             else:
-                p = ax[0].plot(c,logistic_5P(c,*sig_params[i,j,k,:]), **q_colors[j], **fit_style)        
+                p = axs_focus_BLM[0].plot(c,logistic_5P(c,*sig_params[i,j,k,:]), **q_colors[j], **fit_style)        
+            if k == 1: plt.setp(p,'label','{:.0E}'.format(quantities[j]))
+            
+        if lm:
+            if is_4PLM[i,j,k]:
+                p = axs_focus_LMs[0].plot(c,logistic_4P(c,*sig_params[i,j,k,:-1]), **q_colors[j], **fit_style)
+            else:
+                p = axs_focus_LMs[0].plot(c,logistic_5P(c,*sig_params[i,j,k,:]), **q_colors[j], **fit_style)        
             if k == 1: plt.setp(p,'label','{:.0E}'.format(quantities[j]))
             
     
@@ -655,30 +792,32 @@ def focusTarget(focus_t, F, targets, quantities,
         p1 = np.poly1d(Lin1_params[i,j,k])
         p2 = np.poly1d(Lin2_params[i,j,k])
         
-        axs_focus_LMs[1].plot(Lin1_F,p1(Lin1_F), **q_colors[j], **fit_style)
-        axs_focus_LMs[1].plot(Lin2_F,p2(Lin2_F), **q_colors[j], **fit_style)
+        if lm:
+            axs_focus_LMs[1].plot(Lin1_F,p1(Lin1_F), **q_colors[j], **fit_style)
+            axs_focus_LMs[1].plot(Lin2_F,p2(Lin2_F), **q_colors[j], **fit_style)
+            
+            axs_focus_LMs[2].plot(Lin1_c,np.exp( np.exp( p1(Lin1_F) ) ), **q_colors[j], **fit_style)
+            axs_focus_LMs[2].plot(Lin2_c,np.exp( np.exp( p2(Lin2_F) ) ), **q_colors[j], **fit_style)
+            #Extrapolate the first fit back to the beginning
+            extrap_F = this_F[:stop_ground]
+            extrap_c = c[:stop_ground]
+            axs_focus_LMs[2].plot(extrap_c,np.exp( np.exp( p1(extrap_F) ) ), **q_colors[j], **extrap_style)
         
-        axs_focus_LMs[2].plot(Lin1_c,np.exp( np.exp( p1(Lin1_F) ) ), **q_colors[j], **fit_style)
-        axs_focus_LMs[2].plot(Lin2_c,np.exp( np.exp( p2(Lin2_F) ) ), **q_colors[j], **fit_style)
-        #Extrapolate the first fit back to the beginning
-        extrap_F = this_F[:stop_ground]
-        extrap_c = c[:stop_ground]
-        axs_focus_LMs[2].plot(extrap_c,np.exp( np.exp( p1(extrap_F) ) ), **q_colors[j], **extrap_style)
+        if blm:
+            #Overlay the bilinear model fits
+            if badBLMFit[i,j,k]: continue
+            BLM_F = this_F[start_decline:-1]
+            x = np.linspace(this_F[start_decline],np.max(this_F),100)
+            BLM_c = c[start_decline:-1]
+            axs_focus_BLM[1].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
+            axs_focus_BLM[2].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)
+            #Extrapolate back to the beginning
+            extrap_F = this_F[:start_decline]
+            extrap_c = c[:start_decline]
+            axs_focus_BLM[2].plot(extrap_c,np.exp( np.exp( E_BLM(extrap_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **extrap_style)
     
-        #Overlay the bilinear model fits
-        if badBLMFit[i,j,k]: continue
-        BLM_F = this_F[start_decline:-1]
-        x = np.linspace(this_F[start_decline],np.max(this_F),100)
-        BLM_c = c[start_decline:-1]
-        axs_focus_BLM[1].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
-        axs_focus_BLM[2].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)
-        #Extrapolate back to the beginning
-        extrap_F = this_F[:start_decline]
-        extrap_c = c[:start_decline]
-        axs_focus_BLM[2].plot(extrap_c,np.exp( np.exp( E_BLM(extrap_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **extrap_style)
-    
-    axs_focus_LMs[0].legend(title = 'Copies')
-    axs_focus_BLM[0].legend(title = 'Copies')
+    if lm: axs_focus_LMs[0].legend(title = 'Copies')
+    if blm: axs_focus_BLM[0].legend(title = 'Copies')
     
     for ax in focus_axs:
         plt.setp(ax[0],**{
