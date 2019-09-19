@@ -12,7 +12,10 @@ from . import myUtils as mypy
 
 def importQuantStudio(data_pth, data_file, *,
                       header = None, debug = False):
-    if header is None: header = 42
+    test = pd.read_excel(data_pth / data_file,
+                             sheet_name = 'Sample Setup')
+    if header is None: 
+        header = pd.Index(test.iloc[:,0]).get_loc('Well')+1
     
     try:
         setup = pd.read_excel(data_pth / data_file,
@@ -20,6 +23,10 @@ def importQuantStudio(data_pth, data_file, *,
     except PermissionError as e:
         print('Permission Denied. The file may be open; close the file and try again.')
         return print(e)
+    
+    if 'Target Name' not in setup.columns:
+        display(setup)
+    
     wells = setup[~setup['Target Name'].isna()].Well
     
     raw = pd.read_excel(data_pth / data_file,
@@ -31,7 +38,6 @@ def importQuantStudio(data_pth, data_file, *,
     instr_results = pd.read_excel(data_pth / data_file,
                          sheet_name = 'Results', header = header)
     
-    if debug: display(instr_results)
     instr_results.CT.mask(instr_results.CT == 'Undetermined',np.nan,inplace=True)
     
     imps = {'setup'         : setup,
@@ -57,7 +63,8 @@ def reshapeQS_SNX(targets, n_r, *, quantities = None,
     
     #Number of quantities (n_q) and logged quantities (lg_q)
     if quantities is None:
-        quantities = mypy.uniq(setup.Quantity[setup.TargetName.isin(targets)])
+        quantities = mypy.uniq(setup.Quantity[setup.TargetName.isin(targets)]).sort[::-1]
+        
     n_q = len(quantities)
     
     n_c = len(c)
@@ -69,22 +76,23 @@ def reshapeQS_SNX(targets, n_r, *, quantities = None,
     #   Dim2 -> concentrations
     #   Dim3 -> replicates
     #   Dim4 -> cycle data
-    for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        setup_mask = (setup.TargetName == targets[i]) & (setup.Quantity == quantities[j])
-        assert sum(setup_mask) == n_r
+    for (t,q,r) in np.ndindex(n_t,n_q,n_r):
+        setup_mask = (setup.TargetName == targets[t]) & (setup.Quantity == quantities[q])
+        assert sum(setup_mask) == n_r, \
+            f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}'
         
-        well_map[i,j,k] = setup.Well[setup_mask].iloc[k]
+        well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
         
-        data_mask = (data.Well == well_map[i,j,k]) & (data.TargetName == targets[i])
+        data_mask = (data.Well == well_map[t,q,r]) & (data.TargetName == targets[t])
         assert sum(data_mask) == n_c
         
-        Rn[i,j,k,:] = data.Rn[data_mask]
-        dRn[i,j,k,:] = data.DeltaRn[data_mask]
+        Rn[t,q,r,:] = data.Rn[data_mask]
+        dRn[t,q,r,:] = data.DeltaRn[data_mask]
         
-        result = instr_results[(instr_results.Well == well_map[i,j,k]) &
-                               (instr_results.TargetName == targets[i])]
-        ct_instr[i,j,k] = result.CT
-        thresh_instr[i,j,k] = result.CtThreshold
+        result = instr_results[(instr_results.Well == well_map[t,q,r]) &
+                               (instr_results.TargetName == targets[t])]
+        ct_instr[t,q,r] = result.CT
+        thresh_instr[t,q,r] = result.CtThreshold
         
     return {'c'             : c,
             'n_t'           : n_t,
@@ -96,7 +104,7 @@ def reshapeQS_SNX(targets, n_r, *, quantities = None,
             'thresh_instr'  : thresh_instr}
 
 
-def reshapeQS_MUX(targets, fluors, n_r, *,
+def reshapeQS_MUX(targets, fluors, n_r, *, delin = ' - ',
                   setup = None, raw = None, data = None, instr_results = None):
     
     #Number of cycles (n_c) and array of cycle numbers (c)
@@ -122,16 +130,17 @@ def reshapeQS_MUX(targets, fluors, n_r, *,
     #Number of quantities (n_q)
     q_mask = (setup.TargetName.str.contains(targets[0], regex = False)) & \
              (setup.TargetName.str.contains(fluors[0], regex = False))
-    quantities = np.sort(mypy.uniq(setup.Quantity[q_mask]))
+    quantities = np.sort(mypy.uniq(setup.Quantity[q_mask]))[::-1]
     n_q = len(quantities)
     
     well_map = np.zeros([n_t,n_q,n_r])
     
     for (t,q,r) in np.ndindex(n_t,n_q,n_r):
-        setup_mask = (setup.TargetName.str.contains(targets[t], regex = False)) & \
-                     (setup.TargetName.str.contains(fluors[0], regex = False)) & \
+        tar = targets[t] + delin + fluors[0]
+        setup_mask = (setup.TargetName.str.match(tar)) & \
                      (setup.Quantity == quantities[q])
-        assert sum(setup_mask) == n_r
+        assert sum(setup_mask) == n_r, \
+            f'{sum(setup_mask)} wells match target {tar} and quantity {quantities[q]}'
         
         well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
     
@@ -147,7 +156,8 @@ def reshapeQS_MUX(targets, fluors, n_r, *,
         q_map[t,q,r,f] = quant[0]
         data_mask = (data.Well == well_map[t,q,r]) & \
                 (data.TargetName.str.contains(fluors[f]))
-        assert sum(data_mask) == n_c
+        assert sum(data_mask) == n_c, \
+            f'{sum(data_mask)} rows match well {well_map[t,q,r]} and fluorophore {fluors[f]}'
         
         Rn[t,q,r,f,:] = data.Rn[data_mask]
         dRn[t,q,r,f,:] = data.DeltaRn[data_mask]
@@ -191,9 +201,8 @@ def calcCTs(dRn, thresholds, n_t, n_q, n_r, n_c, interp_step = 0.01):
 #%% Plot Rn and dRn, overlaying replicates
 
 
-def setupOverlay(targets, quantities, t_map = None, q_colors = None):
+def setupOverlay(targets, labels, plt_kwargs = {}, t_map = None, q_colors = None, show_legend = True):
     n_t = len(targets)
-    n_q = len(quantities)
               
     fig = plt.figure(constrained_layout = True,
                  figsize = [20,8])
@@ -230,25 +239,27 @@ def setupOverlay(targets, quantities, t_map = None, q_colors = None):
     with plt.rc_context({'axes.titlesize':'large'}):
         for t in targets: axs[t].set_title(t)
     
-    if q_colors is None:
-        cmap_q = sns.color_palette('cubehelix',n_q+1)
-        q_colors = {j:{'color' : cmap_q[j]} for j in range(n_q)}
-    
-    ## Add legend in blank gridspec location
-    # Add a subplot in the location
-    axs['legend'] = fig.add_subplot(gs_map['legend'])
-    # plot dummy data with appropriate labels, add legend, then remove axes
-    if type(quantities) is np.ndarray:
-        for j,q in enumerate(quantities):
-            axs['legend'].plot(0,0, **q_colors[j], label=f'{q:.1E}')
-        axs['legend'].legend(loc = 'center', title = 'log10(Copies)')
-    else:
-        for k,v in q_colors.items():
-            axs['legend'].plot(0,0, **v, label=k)
-        axs['legend'].legend(loc = 'center')
-    axs['legend'].set_frame_on(False)
-    axs['legend'].axes.get_xaxis().set_visible(False)
-    axs['legend'].axes.get_yaxis().set_visible(False)
+    if show_legend:
+        ## Add legend in blank gridspec location
+        # Add a subplot in the location
+        axs['legend'] = fig.add_subplot(gs_map['legend'])
+        # plot dummy data with appropriate labels, add legend, then remove axes
+        
+        if q_colors is not None:
+            for j,q in enumerate(labels):
+                axs['legend'].plot(0,0, **plt_kwargs, **q_colors[j], label=f'{q}')
+            axs['legend'].legend(loc = 'center', title = 'log10(Copies)', fontsize = 20)
+        else:
+            for k,v in plt_kwargs.items():
+                axs['legend'].plot(0,0, **v, label=k)
+            axs['legend'].legend(loc = 'center', fontsize = 20)
+        plt.setp(axs['legend'],**{
+                'frame_on' : False,
+                'xlim'     : [1,2],
+                'ylim'     : [1,2],
+                })
+        axs['legend'].axes.get_xaxis().set_visible(False)
+        axs['legend'].axes.get_yaxis().set_visible(False)
     
     return fig, axs
 
@@ -350,15 +361,15 @@ def plotEfit(targets, lg_q, CTs, t_colors = None, style = 'absolute'):
     ax_CT_eff[0].legend()
     plt.setp(ax_CT_eff[0],**{
             'xticks': lg_q,
-            'title' : 'Competitor Efficiency fits to CTs',
+            'title' : 'Efficiency fits to CTs',
             'xlabel': 'log$_{10}$ Copies',
             'ylabel': 'C$_{T}$'
             })
     
     if style.casefold() in ('%','percent'):
         for v in target_stats.values():
-            v['E'] /= 2
-            v['dE'] /= 2
+            v['E'] /= 0.02
+            v['dE'] /= 0.02
         
     for i,t in enumerate(targets):
         plotBox(ax_CT_eff[1],i+1,target_stats[t]['E'],target_stats[t]['dE'],style = t_colors[t]) 
@@ -371,7 +382,7 @@ def plotEfit(targets, lg_q, CTs, t_colors = None, style = 'absolute'):
         ax_CT_eff[1].set_ylabel('Efficiency (%)')
         
     plt.setp(ax_CT_eff[1],**{
-            'title'        : 'Target Efficiencies from CT Fits',
+            'title'        : 'Efficiencies from CT Fits',
             'xlabel'       : 'Target',
             'xlim'         : [0.5,n_t+0.5],
             'xticks'       : np.arange(n_t)+1,
