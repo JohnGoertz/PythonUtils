@@ -29,9 +29,12 @@ def importQuantStudio(data_pth, data_file, *,
     
     wells = setup[~setup['Target Name'].isna()].Well
     
-    raw = pd.read_excel(data_pth / data_file,
-                         sheet_name = 'Raw Data', header = header)
-
+    try:
+        raw = pd.read_excel(data_pth / data_file,
+                             sheet_name = 'Raw Data', header = header)
+    except:
+        raw = None
+        
     data = pd.read_excel(data_pth / data_file,
                          sheet_name = 'Amplification Data', header = header)
     
@@ -46,6 +49,7 @@ def importQuantStudio(data_pth, data_file, *,
             'instr_results' : instr_results}
     
     for df in imps.values():
+        if df is None: continue
         df.columns = df.columns.str.replace(' ', '')
         df = df[df.Well.isin(wells)]
     
@@ -201,7 +205,8 @@ def calcCTs(dRn, thresholds, n_t, n_q, n_r, n_c, interp_step = 0.01):
 #%% Plot Rn and dRn, overlaying replicates
 
 
-def setupOverlay(targets, labels, plt_kwargs = {}, t_map = None, q_colors = None, show_legend = True):
+def setupOverlay(targets, labels, plt_kwargs = {},
+                 t_map = None, q_colors = None, show_legend = True):
     n_t = len(targets)
               
     fig = plt.figure(constrained_layout = True,
