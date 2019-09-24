@@ -885,7 +885,8 @@ def plotParams(FitParams,thresholds):
 
     fig, axs = plt.subplots(nrows, ncols)
     
-    for i,ax in enumerate(axs.flat):
+    for i in range(n_p):
+        ax = axs.flat[i]
         p = params[i]
         ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         
@@ -900,6 +901,9 @@ def plotParams(FitParams,thresholds):
         ax.set_xlabel('')
         ax.set_ylabel('')
         ax.set_xticklabels(ax.get_xticklabels(),rotation = 30)
+    
+    for i in range(n_p,axs.size):
+        axs.flat[i].axis('off')
         
     return fig, axs
 
