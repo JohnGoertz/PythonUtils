@@ -872,7 +872,7 @@ def DF_params(params, F, targets, quantities):
     
     return pd.DataFrame({**base,**params})
 
-def plotParams(FitParams,thresholds):
+def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity'):
     params = list(thresholds.keys())
     n_p = len(thresholds)
     if n_p < 4:
@@ -891,10 +891,10 @@ def plotParams(FitParams,thresholds):
         ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         
         good = ~((np.abs(FitParams[p]) > thresholds[p]) | FitParams.bad | np.isnan(FitParams[p]) | np.isinf(FitParams[p]))
-        sns.violinplot(x = 'Target', y = p, data = FitParams[good],
+        sns.violinplot(x = x, y = p, data = FitParams[good],
                        color ='white', inner = None, cut = 0, ax = ax)
-        sns.stripplot(x = 'Target', y = p, data = FitParams[good],
-                       size = 10, alpha = 0.5, jitter = False, hue = 'Quantity', ax = ax)
+        sns.stripplot(x = x, y = p, data = FitParams[good],
+                       size = 10, alpha = 0.5, jitter = False, hue = hue, ax = ax)
         ax.set_title(p)
         
         ax.legend().remove()
