@@ -890,7 +890,14 @@ def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity'):
         p = params[i]
         ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         
-        good = ~((np.abs(FitParams[p]) > thresholds[p]) | FitParams.bad | np.isnan(FitParams[p]) | np.isinf(FitParams[p]))
+        thresh = thresholds[p]
+        if thresh is np.ndarray:
+            assert len(thresh) == 2, 'Threshold must have at most two bounds'
+            out = (FitParams[p] < thresh[0]) | (FitParams[p] > thresh[1])
+        else:
+            out = (np.abs(FitParams[p]) > thresholds[p])
+        na = FitParams[p].isin([np.nan,np.inf,-np.inf])
+        good = ~(out | na | FitParams.bad)
         sns.violinplot(x = x, y = p, data = FitParams[good],
                        color ='white', inner = None, cut = 0, ax = ax)
         sns.stripplot(x = x, y = p, data = FitParams[good],
