@@ -44,10 +44,9 @@ def setupPath(processed = None):
         data_pth = base_pth / 'Data'
     else:
         data_pth = base_pth / processed
-    rslt_pth_parent = base_pth / 'Results'
-    rslt_pth = rslt_pth_parent / pl.Path(datetime.datetime.now().strftime('%y-%m-%d'))
+    rslt_pth = base_pth / 'Results'
     rslt_pth.mkdir(parents=True, exist_ok=True)
-    return code_pth, base_pth, data_pth, rslt_pth, rslt_pth_parent
+    return code_pth, base_pth, data_pth, rslt_pth
 
 
 def setupShelves(newpath, newname, oldpath = None, oldname = None):
