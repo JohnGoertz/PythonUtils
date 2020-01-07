@@ -4,6 +4,7 @@ import pandas as pd
 import seaborn as sns
 import scipy.stats as stat
 import scipy.optimize as opt
+import warnings
 
 from . import myUtils as mypy
 
@@ -82,10 +83,13 @@ def reshapeQS_SNX(targets, n_r, *, quantities = None,
     #   Dim4 -> cycle data
     for (t,q,r) in np.ndindex(n_t,n_q,n_r):
         setup_mask = (setup.TargetName == targets[t]) & (setup.Quantity == quantities[q])
-        assert sum(setup_mask) == n_r, \
-            f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}'
         
-        well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+        if sum(setup_mask) == n_r:
+            well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+        else:
+            warnings.warn(f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}')
+            continue
+        
         
         data_mask = (data.Well == well_map[t,q,r]) & (data.TargetName == targets[t])
         assert sum(data_mask) == n_c
@@ -143,10 +147,12 @@ def reshapeQS_MUX(targets, fluors, n_r, *, delin = ' - ',
         tar = targets[t] + delin + fluors[0]
         setup_mask = (setup.TargetName.str.match(tar)) & \
                      (setup.Quantity == quantities[q])
-        assert sum(setup_mask) == n_r, \
-            f'{sum(setup_mask)} wells match target {tar} and quantity {quantities[q]}'
         
-        well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+        if sum(setup_mask) == n_r:
+            well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
+        else:
+            warnings.warn(f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}')
+            well_map[t,q,r] = np.nan
     
     q_map, ct_instr, thresh_instr = [np.zeros([n_t,n_q,n_r,n_f]) for _ in range(3)]
     Rn, dRn = [np.zeros([n_t,n_q,n_r,n_f,n_c]) for _ in range(2)]
@@ -156,10 +162,22 @@ def reshapeQS_MUX(targets, fluors, n_r, *, delin = ' - ',
                 (setup.Well == well_map[t,q,r]) & 
                 (setup.TargetName.str.contains(fluors[f]))
                 ])
-        assert len(quant) == 1, 'Quantity is not unique'
+        tar = targets[t] + delin + fluors[f]
+        assert len(quant) <= 1, \
+            f'Quantity is not unique for target {tar}, fluor {fluors[f]}, quantity {quantities[q]}, rep {r}'
+        if len(quant) == 0:
+            warnings.warn(f'Quantity {quantities[q]} not found for target {tar}, fluor {fluors[f]}, rep {r}')
+            continue
         q_map[t,q,r,f] = quant[0]
         data_mask = (data.Well == well_map[t,q,r]) & \
                 (data.TargetName.str.contains(fluors[f]))
+        
+        if sum(data_mask) != n_c:
+            tar = targets[t] + delin + fluors[0]
+            print(tar)
+            print('{:}|{:}|{:}'.format(t,q,r))
+            print(quant)
+            continue
         assert sum(data_mask) == n_c, \
             f'{sum(data_mask)} rows match well {well_map[t,q,r]} and fluorophore {fluors[f]}'
         
