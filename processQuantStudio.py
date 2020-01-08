@@ -892,7 +892,8 @@ def DF_params(params, F, targets, quantities):
     
     return pd.DataFrame({**base,**params})
 
-def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity'):
+def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity', order = None):
+    
     params = list(thresholds.keys())
     n_p = len(thresholds)
     if n_p < 4:
@@ -903,34 +904,54 @@ def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity'):
         nrows = int(sq)
         ncols = n_p//nrows + int(n_p % nrows != 0)
 
-    fig, axs = plt.subplots(nrows, ncols)
+    fig, axs = plt.subplots(nrows, ncols, squeeze = False)
+    
+    bad = pd.Series(index=FitParams.index,dtype=bool)
     
     for i in range(n_p):
-        ax = axs.flat[i]
         p = params[i]
-        ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         
         thresh = thresholds[p]
         if thresh is np.ndarray:
             assert len(thresh) == 2, 'Threshold must have at most two bounds'
             out = (FitParams[p] < thresh[0]) | (FitParams[p] > thresh[1])
         else:
-            out = (np.abs(FitParams[p]) > thresholds[p])
+            out = (np.abs(FitParams[p]) > np.abs(thresholds[p]))
         na = FitParams[p].isin([np.nan,np.inf,-np.inf])
-        good = ~(out | na | FitParams.bad)
+        bad = bad | out | na | FitParams.bad
+        
+    good = ~bad
+    
+       
+    for i in range(n_p):
+        p = params[i]
+        ax = axs.flat[i]
+        ax.ticklabel_format(axis='y', style='sci', scilimits=(-2,2))
         sns.violinplot(x = x, y = p, data = FitParams[good],
-                       color ='white', inner = None, cut = 0, ax = ax)
+                      order=order, 
+                       color ='white', inner = None, cut = 0, ax = ax,zorder=0)
+        
+        
+        for i,tar in enumerate(order):
+            this = FitParams[good]
+            this = this[this[x]==tar]
+            zorder = this.sort_values(by=[hue]).index
+            ax.scatter(x=[i for _ in range(len(this))],y=this[p][zorder],c=this.color[zorder],s=10**2,zorder=5)
+        '''
         sns.stripplot(x = x, y = p, data = FitParams[good],
-                       size = 10, alpha = 0.5, jitter = False, hue = hue, ax = ax)
+                      order=order, 
+                      size = 10, alpha = 1, jitter = False, hue = hue, ax = ax)
+        '''
         ax.set_title(p)
         
-        ax.legend().remove()
+        #ax.legend().remove()
         ax.set_xlabel('')
         ax.set_ylabel('')
         ax.set_xticklabels(ax.get_xticklabels(),rotation = 30)
     
     for i in range(n_p,axs.size):
         axs.flat[i].axis('off')
+        
         
     return fig, axs
 
