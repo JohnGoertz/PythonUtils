@@ -224,11 +224,13 @@ def calcCTs(dRn, thresholds, n_t, n_q, n_r, n_c, interp_step = 0.01):
 
 
 def setupOverlay(targets, labels, plt_kwargs = {},
-                 t_map = None, q_colors = None, show_legend = True):
+                 t_map = None, q_colors = None, show_legend = True,
+                 fig = None,):
     n_t = len(targets)
               
-    fig = plt.figure(constrained_layout = True,
-                 figsize = [20,8])
+    if fig is None:
+        fig = plt.figure(constrained_layout = True,
+                     figsize = [20,8])
     if t_map is not None:
         #Use the coordinates specified in t_map
         nrows, ncols = max(t_map.values())
@@ -271,11 +273,11 @@ def setupOverlay(targets, labels, plt_kwargs = {},
         if q_colors is not None:
             for j,q in enumerate(labels):
                 axs['legend'].plot(0,0, **plt_kwargs, **q_colors[j], label=f'{q}')
-            axs['legend'].legend(loc = 'center', title = 'log10(Copies)', fontsize = 20)
+            axs['legend'].legend(loc = 'center', title = 'log10(Copies)', fontsize = 16)
         else:
             for k,v in plt_kwargs.items():
                 axs['legend'].plot(0,0, **v, label=k)
-            axs['legend'].legend(loc = 'center', fontsize = 20)
+            axs['legend'].legend(loc = 'center', fontsize = 16)
         plt.setp(axs['legend'],**{
                 'frame_on' : False,
                 'xlim'     : [1,2],
