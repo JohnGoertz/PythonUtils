@@ -13,42 +13,46 @@ from . import myUtils as mypy
 
 def importQuantStudio(data_pth, data_file, *,
                       header = None, debug = False):
-    test = pd.read_excel(data_pth / data_file,
-                             sheet_name = 'Sample Setup')
-    if header is None: 
-        header = pd.Index(test.iloc[:,0]).get_loc('Well')+1
-    
+  
     try:
-        setup = pd.read_excel(data_pth / data_file,
-                             sheet_name = 'Sample Setup', header = header)
+        xlsx = pd.ExcelFile(data_pth / data_file)
     except PermissionError as e:
         print('Permission Denied. The file may be open; close the file and try again.')
         return print(e)
     
-    if 'Target Name' not in setup.columns:
-        display(setup)
+    if header is None: 
+        test = pd.read_excel(xlsx, sheet_name = 'Sample Setup')
+        header = pd.Index(test.iloc[:,0]).get_loc('Well')+1
+        
+    sheets = pd.read_excel(xlsx, header = header,
+                         sheet_name = ['Sample Setup',
+                                       #'Raw Data',
+                                       'Amplification Data',
+                                       'Results',
+                                      ])
+                           
     
-    wells = setup[~setup['Target Name'].isna()].Well
-    
+    imps = {'setup'         : sheets['Sample Setup'],
+            #'raw'           : sheets['Raw Data'],
+            'data'          : sheets['Amplification Data'],
+            'instr_results' : sheets['Results'],
+           }
+    '''
     try:
-        raw = pd.read_excel(data_pth / data_file,
-                             sheet_name = 'Raw Data', header = header)
+        raw = pd.read_excel(xlsx, sheet_name = 'Raw Data', header = header)
     except:
         raw = None
-        
-    data = pd.read_excel(data_pth / data_file,
-                         sheet_name = 'Amplification Data', header = header)
+    '''    
     
-    instr_results = pd.read_excel(data_pth / data_file,
-                         sheet_name = 'Results', header = header)
     
-    instr_results.CT.mask(instr_results.CT == 'Undetermined',np.nan,inplace=True)
+    if 'Target Name' not in imps['setup'].columns:
+        display(imps['setup'])
     
-    imps = {'setup'         : setup,
-            'raw'           : raw,
-            'data'          : data,
-            'instr_results' : instr_results}
+    undetermined_CT = imps['instr_results'].CT.astype(str).str.contains('Undetermined')
+    imps['instr_results'].CT.mask(undetermined_CT,np.nan,inplace=True)
+    imps['instr_results'].CT = imps['instr_results'].CT.astype(float).values
     
+    wells = imps['setup'][~imps['setup']['Target Name'].isna()].Well
     for df in imps.values():
         if df is None: continue
         df.columns = df.columns.str.replace(' ', '')
@@ -932,11 +936,13 @@ def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity', order = None
                        color ='white', inner = None, cut = 0, ax = ax,zorder=0)
         
         
-        for i,tar in enumerate(order):
+        for i,val in enumerate(order):
             this = FitParams[good]
-            this = this[this[x]==tar]
-            zorder = this.sort_values(by=[hue]).index
-            ax.scatter(x=[i for _ in range(len(this))],y=this[p][zorder],c=this.color[zorder],s=10**2,zorder=5)
+            this = this[this[x]==val]
+            dot_zorder = this.sort_values(by=[hue]).index
+            ax.scatter(x=[i for _ in range(len(this))],y=this[p][dot_zorder],c=this.color[dot_zorder],s=10**2,zorder=5)
+            median_rxn_val = np.median(this[this.Quantity==np.median(this.Quantity)][p])
+            ax.plot([i-0.25, i+0.25],[median_rxn_val,median_rxn_val],'k',zorder=1)
         '''
         sns.stripplot(x = x, y = p, data = FitParams[good],
                       order=order, 
