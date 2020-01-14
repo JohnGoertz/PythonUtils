@@ -58,12 +58,13 @@ class CompetitiveReaction:
         'solution' : None,
         'frozen' : False,
         'sweep_INT_idx' : 0,
-        'oligo_init' : 10**5,
-        'rate' : 1,
-        'primer_init' : 120
+        'sweep_ax' : None,
+        'oligo_inits' : 10**5,
+        'rates' : 1,
+        'primer_inits' : 120,
     }
     
-    def __init__(self, INT_inputs, EXT_inputs, labeled_strands, warnings=True):
+    def __init__(self, INT_inputs, EXT_inputs, labeled_strands):
         self.INT_inputs = INT_inputs
         self.INTs = list(INT_inputs.keys())
         self.EXT_inputs = EXT_inputs
@@ -71,7 +72,6 @@ class CompetitiveReaction:
         self.labeled_strands = labeled_strands
         self.labels = list(set(labeled_strands.values()))
         assert len(self.list('labels'))<=2, 'No more than two labels may be used (for now)'
-        self.warn = warnings
         self.input_oligos = {**INT_inputs,**EXT_inputs}
         assert all([len(pair)==2 for pair in self.input_oligos.values()]), 'All strands must have exactly two primers'
         self._primers_list = list(sorted(set(primer for pair in self.input_oligos.values() for primer in pair)))
@@ -81,7 +81,7 @@ class CompetitiveReaction:
         self.buildEquations()
         self.setDefaults()
         self.buildLabels()
-        self.compileODE()
+        self.compileODE(verbose=True)
             
     ################################################################################
     ## Convenience Functions
@@ -229,19 +229,15 @@ class CompetitiveReaction:
     
     def setDefaults(self):
         dflt = self.defaults
-        self.norm = dflt['norm']
-        self.sweep_INT = self.INTs[dflt['sweep_INT_idx']]
-        self.INT_rng = dflt['INT_rng']
-        self.INT_res = dflt['INT_res']
-        self.cycles = dflt['cycles']
-        self.diffs = dflt['diffs']
-        self.solution = dflt['solution']
-        self.frozen = dflt['frozen']
+        for k,v in dflt.items():
+            if k not in ['oligo_inits','rates','primer_inits']:
+                setattr(self,k,v)
+        self.sweep_INT = self.INTs[self.sweep_INT_idx]
         for oligo in self.oligos:
-            self.set_oligo_init(oligo,dflt['oligo_init'])
-            self.set_rate(oligo,dflt['rate'])
+            self.set_oligo_init(oligo,dflt['oligo_inits'])
+            self.set_rate(oligo,dflt['rates'])
         for primer in self.primers:
-            self.set_primer_init(primer,dflt['primer_init'])
+            self.set_primer_init(primer,dflt['primer_inits'])
     
     def buildLabels(self):
         label1_strands_list = ['_'.join(oligo) for oligo,row in self.connections.iterrows() if row.Label == self.list('labels')[0]]
@@ -252,8 +248,6 @@ class CompetitiveReaction:
     ################################################################################
     ## Running a simulation
     ################################################################################
-    
-    
     
     def freezeEquations(self):
         '''Replace symbolic parameters in equations with explicit values'''
@@ -270,7 +264,7 @@ class CompetitiveReaction:
         if self.frozen: return
         self.ODE.set_parameters(*[rate.value for rate in self.rates])
     
-    def compileODE(self, integrator='dopri5',**kwargs):
+    def compileODE(self, integrator='dopri5', verbose=False, **kwargs):
         """
         Compile equations with selected integrator
         
@@ -278,9 +272,9 @@ class CompetitiveReaction:
             'dopri5','RK45','dop853','RK23','BDF','lsoda','LSODA','Radau','vode'
         """
         if self.frozen:
-            self.ODE = jc.jitcode(self.eqns,**kwargs)
+            self.ODE = jc.jitcode(self.eqns, verbose=verbose, **kwargs)
         else:
-            self.ODE = jc.jitcode(self.eqns, control_pars=[rate.sym for rate in self.rates],**kwargs)
+            self.ODE = jc.jitcode(self.eqns, control_pars=[rate.sym for rate in self.rates], verbose=verbose, **kwargs)
         
         self.ODE.set_integrator(integrator)
     
@@ -358,80 +352,100 @@ class CompetitiveReaction:
     
     # TODO: Add INT_grid
     
-    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=True, annotate='Outer', ax=None, indiv=True, plot=True):
-        # TODO: break into atomic functions
-        # TODO: Allow target axis to be specified for individual plots
-        # TODO: Plot total signal for each label
-        
-        if INT is None:
-            INT=self.sweep_INT
-        if rng is None:
-            rng=self.INT_rng
-        if res is None:
-            res=self.INT_res 
-        
-        if ax is not None: indiv=False
-        if not plot: indiv=False
+    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False):
+        if INT is None: INT=self.sweep_INT
+        if rng is None: rng=self.INT_rng
+        if res is None: res=self.INT_res 
         
         rng = np.arange(rng[0],rng[1]+res,res)
         N = len(rng)
         diffs = np.zeros(N)
         iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
-        
-        if (ax is None) & plot:
-            if indiv:
-                fig = plt.figure(constrained_layout=True,figsize=[16,5])
-                gs = fig.add_gridspec(N//3+1,6)
-                ax = fig.add_subplot(gs[:,3:])
-                ind_axs = []
-            else:
-                fig,ax = plt.subplots(1,1)
-        sweep_solutions = {i:{} for i,_ in iterator}
+            
+        solutions = {}
         for i,INT_0 in iterator:
             self.set_oligo_init(INT,10**INT_0)
             self.updateParameters()
-            self.solveODE()
-            if indiv:
-                with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
-                    ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
-                    for L1 in self.list('label1_strands'):
-                        ind_axs[i].plot(np.arange(self.cycles), self.solution[L1]/self.norm, ls='-')
-                    for L2 in self.list('label2_strands'):
-                        ind_axs[i].plot(np.arange(self.cycles), self.solution[L2]/self.norm, ls='--')
-                    plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
-                    plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
-                    if annotate:
-                        plt.annotate(f'{INT_0:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
-                    if (i%3==0)&(i//3+1==(N-1)//3+1):
-                        plt.setp(ind_axs[i],**{
-                            'ylabel' : 'Norm Signal',
-                            'xlabel' : 'Cycles',
-                        })
+            solutions[INT_0] = self.solveODE()
             diffs[i] = self.get_diff()
-         
-        if plot:
-            ax.plot(rng,diffs,'o-')
-            plt.setp(ax,**{
-                'ylim' : [-1.05,1.05],
-                'title' : '{:s}-{:s} after {:d} cycles'.format(*self.list('labels')[::-1],self.cycles),
-                'ylabel' : 'Signal Difference',
-                'xlabel' : f'log10 {INT} copies',
-            })
-
-            if annotate in [True,'Inner','Outer']: self.annotate_diff_plot(ax,diffs,rng,pos=annotate)
-            
         self.diffs=diffs
+        return diffs, solutions
+    
+    def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
+        # TODO: Allow target axis to be specified for individual plots
+        # TODO: Plot total signal for each label
+        
+        if INT is None: INT=self.sweep_INT
+        if rng is None: rng=self.INT_rng
+        if res is None: res=self.INT_res 
+        
+        diffs, sweep_solutions = self.INT_sweep(INT=INT, rng=rng, res=res, progress_bar=progress_bar)
+        
+        if ax is not None: indiv=False
+        
+        if indiv:
+            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,annotate=annotate)
+            ax = fig.add_subplot(gs[:,3:])
+            self.sweep_ax = ax
+        
+        if update:
+            if self.sweep_ax is None:
+                _,self.sweep_ax = self.plotDiffs(diffs)
+            else:
+                self.updateDiffs(self.sweep_ax)
+        else:
+            if ax is None:
+                fig,ax = plt.subplots(1,1)
+            _,self.sweep_ax = self.plotDiffs(diffs,ax=ax)
+            
+        if annotate in [True,'Inner','Outer']:
+            self.annotate_diff_plot(self.sweep_ax,pos=annotate)
             
         return diffs
     
+    def plotDiffs(self,diffs=None,ax=None,rng=None,res=None):
+        if diffs is None: diffs = self.diffs
+        if rng is None: rng = self.INT_rng
+        if res is None: res = self.INT_res
+        fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+        INT = self.sweep_INT
+        rng = np.arange(rng[0],rng[1]+res,res)
+            
+        ax.plot(rng,diffs,'o-')
+        plt.setp(ax,**{
+            'ylim' : [-1.05,1.05],
+            'title' : '{:s}-{:s} after {:d} cycles'.format(*self.list('labels')[::-1],self.cycles),
+            'ylabel' : 'Signal Difference',
+            'xlabel' : f'log10 {INT} copies',
+        })
+        return fig, ax
+    
+    def updateDiffs(self,ax, diffs=None, rng=None, res=None):
+        if diffs is None: diffs = self.diffs
+        if rng is None: rng = self.INT_rng
+        if res is None: res = self.INT_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        ax.lines[0].set_xdata(rng)
+        ax.lines[0].set_ydata(diffs)
+        for l in ax.lines[1:]: l.remove()
+        txts = [child for child in self.sweep_ax.get_children() if type(child)==mpl.text.Annotation]
+        for txt in txts: txt.remove()
+        ax.figure.canvas.draw()
+        print(self.get_diff_stats())
+        
     def get_diff(self):
         return (sum(self.solution[L2][-1] for L2 in self.list('label2_strands'))-
                 sum(self.solution[L1][-1] for L1 in self.list('label1_strands')))/self.norm
     
-    def get_diff_stats(self, diffs,INT_rng):
-        res=0.01
-        wt_interp = np.arange(INT_rng[0],INT_rng[-1]+res,res)
-        diff_interp = np.interp(wt_interp,INT_rng,diffs)
+    def get_diff_stats(self, diffs=None,rng=None):
+        if diffs is None: diffs=self.diffs
+        if rng is None: rng = self.INT_rng
+        res = self.INT_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        
+        interp_res=0.01
+        wt_interp = np.arange(rng[0],rng[-1]+interp_res,interp_res)
+        diff_interp = np.interp(wt_interp,rng,diffs)
         #diff_half = (np.max(diff_interp)-np.min(diff_interp))/2+np.min(diff_interp)
         diff0 = np.argmin(abs(diff_interp))
         diff90 = (np.max(diff_interp)-np.min(diff_interp))*0.9+np.min(diff_interp)
@@ -445,8 +459,10 @@ class CompetitiveReaction:
         }
         return stats
         
-    def annotate_diff_plot(self,ax,diffs,INT_rng,pos='Outer'):
-        stats = self.get_diff_stats(diffs,INT_rng)
+    def annotate_diff_plot(self,ax,diffs=None,rng=None,pos='Outer'):
+        if diffs is None: diffs=self.diffs
+        if rng is None: rng=self.INT_rng
+        stats = self.get_diff_stats(diffs=diffs,rng=rng)
         ax.axvline(stats["Zero"], ls='--', color='k')
 
         if pos in [True,'Outer']:
@@ -469,6 +485,36 @@ class CompetitiveReaction:
         ax.annotate(f'Min: {stats["Min"]:.2f}',
                      xy=(x_pos, .625), xycoords='axes fraction',
                      horizontalalignment='left')
+        
+    def plotTraces(self,ax=None,solution=None):
+        fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+        if solution is None: solution = self.solution
+        for L1 in self.list('label1_strands'):
+            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, ls='-')
+        for L2 in self.list('label2_strands'):
+            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, ls='--')
+        return fig, ax
+            
+    def plotTracesGrid(self,solution_dict,annotate=True):
+        fig = plt.figure(constrained_layout=True,figsize=[16,5])
+        N = len(solution_dict)
+        gs = fig.add_gridspec(N//3+1,6)
+        ind_axs = []
+        INT = self.sweep_INT
+        for i,(INT_0, solution) in enumerate(solution_dict.items()):
+            with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
+                ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
+                self.plotTraces(ax=ind_axs[i],solution=solution)
+                plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
+                plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
+                if annotate in [True,'Inner','Outer']:
+                    plt.annotate(f'{INT_0:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
+                if (i%3==0)&(i//3+1==(N-1)//3+1):
+                    plt.setp(ind_axs[i],**{
+                        'ylabel' : 'Norm Signal',
+                        'xlabel' : 'Cycles',
+                    })
+        return fig, gs, ind_axs
     
     ################################################################################
     ## Interactive configurations with simulating and plotting
@@ -495,18 +541,18 @@ class CompetitiveReaction:
         self.norm = molar2copies(kwargs['norm']*10**-9)
         self.cycles = kwargs['cycles']
         self.INT_rng = self.INT_rng_widget.value
-        self.INT_res = kwargs['INT_res']
+        self.INT_res = np.diff(self.INT_rng)[0]/8# kwargs['INT_res']
         if len(self.list('INTs'))>1:
             self.sweep_INT = self.INT_selector.value
             held_INTs = [INT for INT in self.list('INTs') if INT is not self.INT_selector.value]
             for INT,widg in zip(held_INTs,self.INT_conc_widgets):
                 self.set_oligo_init(INT,10**widg.value)
         if kwargs['plt_rslt']:
-            self.INT_sweep(indiv=kwargs['indiv'])
+            self.plot_INT_sweep(indiv=kwargs['indiv'], update=False)
         return
 
     def interactive(self):
-        ui_concentrations = ipw.interactive(self.interactive_solve, {'manual': True}, 
+        ui_concentrations = ipw.interactive(self.interactive_solve, #{'manual': True}, 
                  **{
                      str(rate):ipw.FloatSlider(min=0.1, max=1.1, step=0.05, value=rate.value,
                                                description=f'{str(rate)[2:]} rate', continuous_update=False)
@@ -521,11 +567,11 @@ class CompetitiveReaction:
                      for EXT in self.EXTs
                  },**{
                  },
-                 norm=ipw.IntSlider(min=1, max=500, step=25, value=120, description='Norm (nM)', continuous_update=False),
-                 INT_res=ipw.FloatSlider(min=0.1, max=2, step=0.05, value=self.INT_res, description='resolution', continuous_update=False),
+                 norm=ipw.IntSlider(min=1, max=500, step=25, value=copies2molar(self.norm)*10**9, description='Norm (nM)', continuous_update=False),
+                 #INT_res=ipw.FloatSlider(min=0.1, max=2, step=0.05, value=self.INT_res, description='resolution', continuous_update=False),
                  cycles=ipw.IntSlider(min=10, max=100, value=self.cycles, description='cycles', continuous_update=False),
-                 plt_rslt=ipw.Checkbox(value=True, description='Plot Result'),
-                 indiv=ipw.Checkbox(value=True, description='Individual Traces'),
+                 plt_rslt=ipw.Checkbox(value=False, description='Plot Result'),
+                 indiv=ipw.Checkbox(value=False, description='Individual Traces'),
             )
         
         self.INT_rng_widget=ipw.FloatRangeSlider(min=0, max=10, step=0.1, value=self.INT_rng,
@@ -540,9 +586,14 @@ class CompetitiveReaction:
         n_primers = len(self.primers)
         n_EXTs = len(self.EXTs)
         
-        rate_widgets = ui_concentrations.children[:n_oligos]
-        primer_widgets = ui_concentrations.children[n_oligos:n_oligos+n_primers]
-        EXT_widgets = list(ui_concentrations.children[n_oligos+n_primers:n_oligos+n_primers+n_EXTs])
+        col1 = n_oligos
+        col2 = col1+n_primers
+        col3 = col2+n_EXTs
+        col4 = col3+2
+        
+        rate_widgets = ui_concentrations.children[:col1]
+        primer_widgets = ui_concentrations.children[col1:col2]
+        EXT_widgets = list(ui_concentrations.children[col2:col3])
         INT_widgets = [self.INT_rng_widget]
         
         if len(self.list('INTs'))>1:
@@ -572,8 +623,8 @@ class CompetitiveReaction:
         display(ipw.HBox([
             self.select_label1,
             self.select_label2, 
-            ipw.VBox(ui_concentrations.children[-7:-4]),
-            ipw.VBox(ui_concentrations.children[-4:-1]),
+            ipw.VBox(ui_concentrations.children[col3:col4]),
+            ipw.VBox(ui_concentrations.children[col4:-1]),
         ]))
         
         display(ui_concentrations.children[-1])#Show the output
