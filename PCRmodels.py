@@ -413,6 +413,8 @@ class CompetitiveReaction:
                           )
         plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
         ax.set_aspect('equal', 'box')
+        ax.set_xlabel('log10 '+str(INT1))
+        ax.set_ylabel('log10 '+str(INT2))
         return diffs
     
     def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
