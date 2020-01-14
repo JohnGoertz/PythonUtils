@@ -412,6 +412,7 @@ class CompetitiveReaction:
                            #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
                           )
         plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
+        ax.set_aspect('equal', 'box')
         return diffs
     
     def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
