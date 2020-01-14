@@ -371,6 +371,49 @@ class CompetitiveReaction:
         self.diffs=diffs
         return diffs, solutions
     
+    def INT_grid(self, INT1=None, INT2=None, progress_bar=True):
+        if INT1 is None: INT1=self.INTs[0]
+        if INT2 is None: INT2=self.INTs[1]
+        rng = self.INT_rng
+        res = self.INT_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        N = len(rng)
+        diffs = np.zeros([N,N])
+        iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
+        for i,INT_0 in iterator:
+            self.set_oligo_init(INT1,10**INT_0)
+            for j,INT_0 in enumerate(rng):
+                self.set_oligo_init(INT2,10**INT_0)
+                self.updateParameters()
+                self.solveODE()
+                diffs[i,j] = self.get_diff()
+        return diffs
+    
+    def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True):
+        if INT1 is None: INT1=self.INTs[0]
+        if INT2 is None: INT2=self.INTs[1]
+        diffs = self.INT_grid(INT1=INT1, INT2=INT2, progress_bar=progress_bar)
+        rng = self.INT_rng
+        res = self.INT_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        ext = np.ceil(np.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
+        fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+        pcm = ax.pcolormesh(rng,rng,diffs.T, cmap = 'RdBu_r',
+                                  vmin=-ext,vmax=ext,
+                                  shading = 'gouraud'
+                            )
+        ax.axvline(5,color='w',linestyle=':')
+        ax.axhline(5,color='w',linestyle=':')
+
+        cbar = plt.colorbar(pcm,ticks=np.arange(-ext,ext+0.5,0.5))#, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
+        #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
+        #cbar_x0s.ax.tick_params(labelsize=16) 
+        cntr = ax.contour(rng,rng,diffs.T,colors = 'k', 
+                           #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
+                          )
+        plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
+        return diffs
+    
     def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
         # TODO: Allow target axis to be specified for individual plots
         # TODO: Plot total signal for each label
