@@ -65,6 +65,34 @@ class CompetitiveReaction:
     }
     
     def __init__(self, INTs, EXTs, labels):
+        """
+        Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
+                
+        Args:
+            INTs (dict of str: (str,str)): "Natural" oligos internal to the system that have design constraints.
+                Keys are the name of the oligo; values are tuples of strings specifying the names of its 'left' and 
+                'right' primers. Both primers must be named explicitly. Although constraints are not enforced by the
+                class (yet), in general INTs should not have labels, should not share primers, and both primers should
+                be distinct. 
+                
+            EXTs (dict of str: (str,str)): Synthetic oligos added to the system that have no/fewer design constraints.
+                Key-value pairs are the same as for INTs. Unlike INTs, EXTs can be labeled, can (should) share primers 
+                with at least one other EXT or INT, and can use the same primer for both directions.
+                
+            labels (dict of (str,str): str): Specify which strands are labeled.
+                Keys are a tuple of strings with the pattern (oligo,strand), e.g. ('WT','L'); values are strings that
+                indicate the name of the label for that strand. For now, only two labels can be used. Additionally, 
+                labels are sorted alphabetically and the final 'signal' is defined as the first label minus the 
+                second, though flexibility should be added later. 
+                
+                Left/right strands are defined by the tuple position of the primer extended to create them. So, if an
+                INT is specified with {'WT':('p0','p1')}, strand WT_L is created through extension of primer p0. If,
+                then, `labels` includes {'WT_L':'FAM'}, each new WT_L strand created contributes to the overall FAM
+                signal. Put a different way, this implies the corresponding probe shares sequence identity with WT_L.
+                Therefore, both the probe and p0 are complementary to WT_R, so the probe gets cleaved when p0 is
+                extended.
+        
+        """
         self.INT_inputs = INTs
         self.INTs = list(INTs.keys())
         self.EXT_inputs = EXTs
