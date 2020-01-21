@@ -64,15 +64,15 @@ class CompetitiveReaction:
         'primer_inits' : 120,
     }
     
-    def __init__(self, INT_inputs, EXT_inputs, labeled_strands):
-        self.INT_inputs = INT_inputs
-        self.INTs = list(INT_inputs.keys())
-        self.EXT_inputs = EXT_inputs
-        self.EXTs = list(EXT_inputs.keys())
-        self.labeled_strands = labeled_strands
-        self.labels = sorted(list(set(labeled_strands.values())))[::-1]
+    def __init__(self, INTs, EXTs, labels):
+        self.INT_inputs = INTs
+        self.INTs = list(INTs.keys())
+        self.EXT_inputs = EXTs
+        self.EXTs = list(EXTs.keys())
+        self.labeled_strands = labels
+        self.labels = sorted(list(set(labels.values())))
         assert len(self.list('labels'))<=2, 'No more than two labels may be used (for now)'
-        self.input_oligos = {**INT_inputs,**EXT_inputs}
+        self.input_oligos = {**INTs,**EXTs}
         assert all([len(pair)==2 for pair in self.input_oligos.values()]), 'All strands must have exactly two primers'
         self._primers_list = list(sorted(set(primer for pair in self.input_oligos.values() for primer in pair)))
         self.oligos = list(self.input_oligos.keys())
@@ -467,7 +467,7 @@ class CompetitiveReaction:
         ax.plot(rng,diffs,'o-')
         plt.setp(ax,**{
             'ylim' : [-1.05,1.05],
-            'title' : '{:s}-{:s} after {:d} cycles'.format(*self.list('labels')[::-1],self.cycles),
+            'title' : '{:s}-{:s} after {:d} cycles'.format(self.labels[0],self.labels[1],self.cycles),
             'ylabel' : 'Signal Difference',
             'xlabel' : f'log10 {INT} copies',
         })
@@ -487,8 +487,8 @@ class CompetitiveReaction:
         print(self.get_diff_stats())
         
     def get_diff(self):
-        return (sum(self.solution[L2][-1] for L2 in self.list('label2_strands'))-
-                sum(self.solution[L1][-1] for L1 in self.list('label1_strands')))/self.norm
+        return (sum(self.solution[L1][-1] for L1 in self.list('label1_strands'))-
+                sum(self.solution[L2][-1] for L2 in self.list('label2_strands')))/self.norm
     
     def get_diff_stats(self, diffs=None,rng=None):
         if diffs is None: diffs=self.diffs
