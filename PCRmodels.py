@@ -70,7 +70,7 @@ class CompetitiveReaction:
         self.EXT_inputs = EXT_inputs
         self.EXTs = list(EXT_inputs.keys())
         self.labeled_strands = labeled_strands
-        self.labels = list(set(labeled_strands.values()))
+        self.labels = sorted(list(set(labeled_strands.values())))[::-1]
         assert len(self.list('labels'))<=2, 'No more than two labels may be used (for now)'
         self.input_oligos = {**INT_inputs,**EXT_inputs}
         assert all([len(pair)==2 for pair in self.input_oligos.values()]), 'All strands must have exactly two primers'
@@ -184,10 +184,14 @@ class CompetitiveReaction:
         self.EXT_inits = [Parameter(EXT+'_0') for EXT in EXT_strands_list]
         self.strand_inits = self.INT_inits+self.EXT_inits
         self.primer_inits = [Parameter(str(primer)+'_0') for primer in self.primers]
+        
+        # A convenience dict for linking a given component and its jitcode y
+        self.ys = {self.from_list('strands',strand).y:str(strand) for strand in self.list('strands')}
+        self.ys.update({self.from_list('primers',primer).y:str(primer) for primer in self.list('primers')})
 
     def buildEquations(self):
 
-        lg2_e = np.log2(np.exp(1))
+        lg2 = se.log(2) #1/np.log2(np.exp(1))
         def get_strand(strand): return self.from_list('strands',strand)
         
         # Lookup table for which strands use a given primer
@@ -211,8 +215,8 @@ class CompetitiveReaction:
 
         eqns = {
             oligo : {
-                get_strand(oligo+'_R').y: self.rates[i].sym/lg2_e*get_strand(oligo+'_L').y*mu[primer_per_strand[get_strand(oligo+'_R')]],
-                get_strand(oligo+'_L').y: self.rates[i].sym/lg2_e*get_strand(oligo+'_R').y*mu[primer_per_strand[get_strand(oligo+'_L')]]
+                get_strand(oligo+'_R').y: self.rates[i].sym*lg2*get_strand(oligo+'_L').y*mu[primer_per_strand[get_strand(oligo+'_R')]],
+                get_strand(oligo+'_L').y: self.rates[i].sym*lg2*get_strand(oligo+'_R').y*mu[primer_per_strand[get_strand(oligo+'_L')]]
             } for i,oligo in enumerate(self.list('oligos'))
         }
 
@@ -224,6 +228,9 @@ class CompetitiveReaction:
         for primer in self.primers})
 
         self.eqns = eqns
+        
+        # Replace the 'y' notation needed for jitcode with the actual names of the components
+        self.print_eqns = {k.subs(self.ys):v.subs(self.ys) for k,v in self.eqns.items()}
 
         return eqns
     
