@@ -4,7 +4,6 @@ import seaborn as sns
 import matplotlib.pyplot as plt
 import matplotlib as mpl
 import ipywidgets as ipw
-
 from tqdm.notebook import tqdm
 
 import jitcode as jc
@@ -46,6 +45,37 @@ def copies2molar(copies):
 def molar2copies(moles):
     #Calculates number of copies in a 10 μL volume
     return moles * 6.022e23 * (10*10**-6)
+
+def FAM_HEX_cmap(N = 64, sat = 'mid'):
+    rosest = {
+        'light' : [199/256, 57/256, 101/256],
+        'mid'  : [179/256, 0/256, 47/256],
+        'dark' : [162/256, 0/256, 70/256],
+    }
+    roses = np.ones((N,4))
+    for i in range(3):
+        roses[:,i] = np.linspace(rosest[sat][i], 1, N)
+
+    tealest = {
+        'light' : [35/256, 135/256, 127/256],
+        'mid'  : [10/256, 111/256, 103/256],
+        'dark' : [0/256, 102/256, 94/256],
+    }
+    teals = np.ones((N,4))
+    for i in range(3):
+        teals[:,i] = np.linspace(1, tealest[sat][i], N)
+
+    concat_colors = np.vstack((roses,teals))
+    cmap = mpl.colors.ListedColormap(concat_colors, name='RsTl')
+    
+    teals = mpl.cm.get_cmap('BrBG',N*2)(np.linspace(0.5,0.9,N))
+    oranges = mpl.cm.get_cmap('PuOr',N*2)(np.linspace(0.1,0.5,N))
+    concat_colors = np.vstack((oranges,teals))
+    cmap = mpl.colors.ListedColormap(concat_colors, name='OrBG')
+
+    return cmap
+
+def grey(): return [132/256,151/256,176/256]
 
 class CompetitiveReaction:
     
@@ -93,6 +123,7 @@ class CompetitiveReaction:
                 extended.
         
         """
+        
         self.INT_inputs = INTs
         self.INTs = list(INTs.keys())
         self.EXT_inputs = EXTs
@@ -384,9 +415,7 @@ class CompetitiveReaction:
     ################################################################################
     ## Solution plotting functions
     ################################################################################
-    
-    # TODO: Add INT_grid
-    
+           
     def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False):
         if INT is None: INT=self.sweep_INT
         if rng is None: rng=self.INT_rng
@@ -424,7 +453,7 @@ class CompetitiveReaction:
                 diffs[i,j] = self.get_diff()
         return diffs
     
-    def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True):
+    def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True, cmap = FAM_HEX_cmap()):
         if INT1 is None: INT1=self.INTs[0]
         if INT2 is None: INT2=self.INTs[1]
         diffs = self.INT_grid(INT1=INT1, INT2=INT2, progress_bar=progress_bar)
@@ -433,7 +462,7 @@ class CompetitiveReaction:
         rng = np.arange(rng[0],rng[1]+res,res)
         ext = np.ceil(np.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
         fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
-        pcm = ax.pcolormesh(rng,rng,diffs.T, cmap = 'RdBu_r',
+        pcm = ax.pcolormesh(rng,rng,diffs.T, cmap = cmap,
                                   vmin=-ext,vmax=ext,
                                   shading = 'gouraud'
                             )
@@ -492,10 +521,14 @@ class CompetitiveReaction:
         INT = self.sweep_INT
         rng = np.arange(rng[0],rng[1]+res,res)
             
-        ax.plot(rng,diffs,'o-')
+        ax.plot(rng,diffs, color=grey(), zorder=0)
+        ax.scatter(rng,diffs, c=diffs, cmap=FAM_HEX_cmap(),
+                   s=10**2, edgecolor=grey(), zorder=1,
+                   vmin=-1, vmax=1,
+                  )
         plt.setp(ax,**{
             'ylim' : [-1.05,1.05],
-            'title' : '{:s}-{:s} after {:d} cycles'.format(self.labels[0],self.labels[1],self.cycles),
+            #'title' : '{:s}-{:s} after {:d} cycles'.format(self.labels[0],self.labels[1],self.cycles),
             'ylabel' : 'Signal Difference',
             'xlabel' : f'log10 {INT} copies',
         })
@@ -544,7 +577,7 @@ class CompetitiveReaction:
         if diffs is None: diffs=self.diffs
         if rng is None: rng=self.INT_rng
         stats = self.get_diff_stats(diffs=diffs,rng=rng)
-        ax.axvline(stats["Zero"], ls='--', color='k')
+        ax.axvline(stats["Zero"], ls='--', color='k', zorder=-1)
 
         if pos in [True,'Outer']:
             x_pos = 1.05
@@ -570,10 +603,12 @@ class CompetitiveReaction:
     def plotTraces(self,ax=None,solution=None):
         fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
         if solution is None: solution = self.solution
-        for L1 in self.list('label1_strands'):
-            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, ls='-')
-        for L2 in self.list('label2_strands'):
-            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, ls='--')
+        L1s = self.list('label1_strands')
+        L2s = self.list('label2_strands')
+        for i,L1 in enumerate(L1s):
+            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(1-(len(L1s)-(i+1))*0.3))
+        for i,L2 in enumerate(L2s):
+            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(0+(len(L2s)-(i+1))*0.3))
         return fig, ax
             
     def plotTracesGrid(self,solution_dict,annotate=True):
