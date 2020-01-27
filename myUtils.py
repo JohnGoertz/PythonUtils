@@ -18,6 +18,8 @@ def plotSettings(env = 'spyder'):
     elif env.lower() in ('jupyter','notebook'):
         plt.style.use('seaborn-notebook')
     
+    mpl.rcParams['font.family'] = 'sans-serif'
+    mpl.rcParams['font.sans-serif'] = 'Futura Bk BT'
     mpl.rcParams['font.size'] = '20'
     mpl.rcParams['axes.linewidth'] = 2
     mpl.rcParams['patch.linewidth'] = 2
@@ -73,16 +75,19 @@ def bigntight(fig_obj):
 
 
 #For saving figures
-def savemyfig(fig_obj, title, path = pl.Path.cwd(), env = 'notebook', silent = False):
+def savemyfig(fig_obj, title, path = pl.Path.cwd(), env = 'notebook', silent = False, **kwargs):
     if env != 'notebook':
         fig_obj.show()
         mng = fig_obj.canvas.manager.window
         mng.activateWindow()
         mng.raise_()
+        
+    if 'bbox_inches' not in kwargs.keys(): kwargs.update({'bbox_inches':'tight'})
+    if 'transparent' not in kwargs.keys(): kwargs.update({'transparent':True})
     if not silent: print('Saving.', end = '')
-    fig_obj.savefig(path / (title+'.png'),dpi=300, bbox_inches='tight')
+    fig_obj.savefig(path / (title+'.png'),dpi=300, **kwargs)
     if not silent: print('.', end = '')
-    fig_obj.savefig(path / (title+'.svg'), bbox_inches='tight')
+    fig_obj.savefig(path / (title+'.svg'), **kwargs)
     if not silent: print('Done')
     return
 
