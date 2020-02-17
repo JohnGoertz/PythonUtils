@@ -166,7 +166,6 @@ class CompetitiveReaction:
     def get_rate(self, oligo):
         oligo = str(oligo)
         rate_name = 'r_'+oligo
-        assert rate>0, 'Rate must be greater than 0'
         assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
         return self.from_list('rates',rate_name).value
         
