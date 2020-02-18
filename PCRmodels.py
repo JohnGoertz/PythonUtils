@@ -420,15 +420,15 @@ class CompetitiveReaction:
     ## Solution plotting functions
     ################################################################################
            
-    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False):
+    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
         if INT is None: INT=self.sweep_INT
         if rng is None: rng=self.INT_rng
-        if res is None: res=self.INT_res 
-        
-        rng = np.arange(rng[0],rng[1]+res,res)
-        N = len(rng)
+        if res is None: res=self.INT_res
+        if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
+            
+        N = len(pts)
         diffs = np.zeros(N)
-        iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
+        iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
             
         solutions = {}
         for i,INT_0 in iterator:
