@@ -19,25 +19,25 @@ class Argument():
     def __init__(self, name):
         self.name = name
         self.sym = se.Symbol(name)
-        
+
     def __str__(self):
         return self.name
-    
+
     def __repr__(self):
         return self.__str__()
 
-class Parameter(Argument):    
+class Parameter(Argument):
     def __init__(self, name, value=1.0):
         self.value = value
         super(Parameter, self).__init__(name)
-        
+
 class Variable(Argument):
     def __init__(self, name, var_list, init=1.0):
         self.y = jc.y(len(var_list))
         self.init = init
         super(Variable, self).__init__(name)
         var_list.append(self)
-        
+
 def copies2molar(copies):
     #Calculates concentration in a 10 μL volume
     return copies / 6.022e23 / (10*10**-6)
@@ -67,10 +67,10 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
 
     concat_colors = np.vstack((roses,teals))
     cmap = mpl.colors.ListedColormap(concat_colors, name='RsTl')
-    
+
     teals = mpl.cm.get_cmap('BrBG',N*2)(np.linspace(0.5,0.9,N))
     oranges = mpl.cm.get_cmap('PuOr',N*2)(np.linspace(0.1,0.5,N))
-    concat_colors = np.vstack((oranges,teals))
+    concat_colors = np.vstack((oranges,teals))[::-1]
     cmap = mpl.colors.ListedColormap(concat_colors, name='OrBG')
 
     return cmap
@@ -78,7 +78,7 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
 def grey(): return [132/256,151/256,176/256]
 
 class CompetitiveReaction:
-    
+
     defaults = {
         'norm' : molar2copies(120*10**-9),
         'cycles' : 60,
@@ -93,37 +93,37 @@ class CompetitiveReaction:
         'rates' : 1,
         'primer_inits' : 120,
     }
-    
+
     def __init__(self, INTs, EXTs, labels):
         """
         Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
-                
+
         Args:
             INTs (dict of str: (str,str)): "Natural" oligos internal to the system that have design constraints.
-                Keys are the name of the oligo; values are tuples of strings specifying the names of its 'left' and 
+                Keys are the name of the oligo; values are tuples of strings specifying the names of its 'left' and
                 'right' primers. Both primers must be named explicitly. Although constraints are not enforced by the
                 class (yet), in general INTs should not have labels, should not share primers, and both primers should
-                be distinct. 
-                
+                be distinct.
+
             EXTs (dict of str: (str,str)): Synthetic oligos added to the system that have no/fewer design constraints.
-                Key-value pairs are the same as for INTs. Unlike INTs, EXTs can be labeled, can (should) share primers 
+                Key-value pairs are the same as for INTs. Unlike INTs, EXTs can be labeled, can (should) share primers
                 with at least one other EXT or INT, and can use the same primer for both directions.
-                
+
             labels (dict of (str,str): str): Specify which strands are labeled.
                 Keys are a tuple of strings with the pattern (oligo,strand), e.g. ('WT','L'); values are strings that
-                indicate the name of the label for that strand. For now, only two labels can be used. Additionally, 
-                labels are sorted alphabetically and the final 'signal' is defined as the first label minus the 
-                second, though flexibility should be added later. 
-                
+                indicate the name of the label for that strand. For now, only two labels can be used. Additionally,
+                labels are sorted alphabetically and the final 'signal' is defined as the first label minus the
+                second, though flexibility should be added later.
+
                 Left/right strands are defined by the tuple position of the primer extended to create them. So, if an
                 INT is specified with {'WT':('p0','p1')}, strand WT_L is created through extension of primer p0. If,
                 then, `labels` includes {'WT_L':'FAM'}, each new WT_L strand created contributes to the overall FAM
                 signal. Put a different way, this implies the corresponding probe shares sequence identity with WT_L.
                 Therefore, both the probe and p0 are complementary to WT_R, so the probe gets cleaved when p0 is
                 extended.
-        
+
         """
-        
+
         self.INT_inputs = INTs
         self.INTs = list(INTs.keys())
         self.EXT_inputs = EXTs
@@ -141,41 +141,40 @@ class CompetitiveReaction:
         self.setDefaults()
         self.buildLabels()
         self.compileODE(verbose=True)
-            
+
     ################################################################################
     ## Convenience Functions
     ################################################################################
-    
+
     def list(self,str_attr):
         return [str(item) for item in getattr(self,str_attr)]
-    
+
     def from_list(self,attribute,item):
         return getattr(self,attribute)[self.list(attribute).index(item)]
-        
+
     ################################################################################
     ## Setters and Getters
     ################################################################################
-    
+
     def set_rate(self, oligo, rate):
         oligo = str(oligo)
         rate_name = 'r_'+oligo
         assert rate>0, 'Rate must be greater than 0'
         assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
         self.from_list('rates',rate_name).value = rate
-        
+
     def get_rate(self, oligo):
         oligo = str(oligo)
         rate_name = 'r_'+oligo
-        assert rate>0, 'Rate must be greater than 0'
         assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
         return self.from_list('rates',rate_name).value
-        
+
     def set_primer_init(self, primer, nM):
         primer = str(primer)
         assert primer in self.list('primers'), f'Primer {primer} not found'
         # Set the init in copies
         self.from_list('primers',primer).init = molar2copies(nM*10**-9)
-        
+
     def get_primer_init(self, primer, copies=False):
         primer = str(primer)
         assert primer in self.list('primers'), f'Primer {primer} not found'
@@ -184,13 +183,13 @@ class CompetitiveReaction:
             return self.from_list('primers',primer).init
         else:
             return copies2molar(self.from_list('primers',primer).init)*10**9
-        
+
     def set_oligo_init(self, oligo, copies):
         oligo = str(oligo)
         assert oligo in self.list('oligos'), f'Oligo {oligo} not found'
         self.from_list('strands',oligo+'_L').init = copies
         self.from_list('strands',oligo+'_R').init = copies
-                
+
     def get_oligo_init(self, oligo):
         oligo = str(oligo)
         assert oligo in self.list('oligos'), f'Oligo {oligo} not found'
@@ -200,11 +199,11 @@ class CompetitiveReaction:
         # Ensure both inits are the same
         assert all(init==inits[0] for init in inits)
         return inits[0]
-    
+
     ################################################################################
     ## Configure the necessary elements for the simulations
     ################################################################################
-        
+
     def buildConnections(self):
         """Builds a pandas dataframe showing all primer-strand pairs as well as labeled strands"""
         strands = [
@@ -220,14 +219,14 @@ class CompetitiveReaction:
         connections = pd.DataFrame(data=strands).set_index(['Oligo','Strand']).fillna(False)
         for idx,row in connections.iterrows():
             assert sum(row[self._primers_list])==1, f'Oligo {"_".join(idx)} has {sum(row[self._primers_list])} primers (should be 1)'
-            
+
         self.connections = connections[['Label'] + self._primers_list]
-        
+
         return connections
-    
+
     def buildComponents(self):
         var_list=[]
-        
+
         INT_strands_list = ['_'.join(strand) for strand in self.connections.index.to_list() if strand[0] in self.list('INTs')]
         EXT_strands_list = ['_'.join(strand) for strand in self.connections.index.to_list() if strand[0] in self.list('EXTs')]
 
@@ -243,7 +242,7 @@ class CompetitiveReaction:
         self.EXT_inits = [Parameter(EXT+'_0') for EXT in EXT_strands_list]
         self.strand_inits = self.INT_inits+self.EXT_inits
         self.primer_inits = [Parameter(str(primer)+'_0') for primer in self.primers]
-        
+
         # A convenience dict for linking a given component and its jitcode y
         self.ys = {self.from_list('strands',strand).y:str(strand) for strand in self.list('strands')}
         self.ys.update({self.from_list('primers',primer).y:str(primer) for primer in self.list('primers')})
@@ -252,7 +251,7 @@ class CompetitiveReaction:
 
         lg2 = se.log(2) #1/np.log2(np.exp(1))
         def get_strand(strand): return self.from_list('strands',strand)
-        
+
         # Lookup table for which strands use a given primer
         strands_per_primer = {
             primer: ['_'.join(idx) for idx in self.connections.index[self.connections[str(primer)]]]
@@ -261,14 +260,14 @@ class CompetitiveReaction:
 
         # Lookup table for which primers are used by a given primer
         primer_per_strand = {
-            get_strand('_'.join(idx)): self.primers[i] for idx,row in self.connections.iterrows() 
+            get_strand('_'.join(idx)): self.primers[i] for idx,row in self.connections.iterrows()
             for i,v in enumerate(row[self.list('primers')]) if v
         }
 
         # Rate-limiting coefficients
-        # The 'half-rate' concentration is the 
+        # The 'half-rate' concentration is the
         mu = {
-            primer : primer.y/(sum(self.strands[i].y for i,strand in enumerate(self.list('strands')) if strand in strands_per_primer[primer]) + primer.y) 
+            primer : primer.y/(sum(self.strands[i].y for i,strand in enumerate(self.list('strands')) if strand in strands_per_primer[primer]) + primer.y)
             for primer in self.primers
         }
 
@@ -287,12 +286,12 @@ class CompetitiveReaction:
         for primer in self.primers})
 
         self.eqns = eqns
-        
+
         # Replace the 'y' notation needed for jitcode with the actual names of the components
         self.print_eqns = {k.subs(self.ys):v.subs(self.ys) for k,v in self.eqns.items()}
 
         return eqns
-    
+
     def setDefaults(self):
         dflt = self.defaults
         for k,v in dflt.items():
@@ -304,36 +303,41 @@ class CompetitiveReaction:
             self.set_rate(oligo,dflt['rates'])
         for primer in self.primers:
             self.set_primer_init(primer,dflt['primer_inits'])
-    
+
     def buildLabels(self):
+        '''
+        Defines which strands are labeled with which fluorophores
+
+        Takes the first label from the alphabetical list (typically FAM) and defines it as label1 and the second label as label1
+        '''
         label1_strands_list = ['_'.join(oligo) for oligo,row in self.connections.iterrows() if row.Label == self.list('labels')[0]]
         self.label1_strands = [self.from_list('strands',strand) for strand in label1_strands_list]
         label2_strands_list = ['_'.join(oligo) for oligo,row in self.connections.iterrows() if row.Label == self.list('labels')[1]]
         self.label2_strands = [self.from_list('strands',strand) for strand in label2_strands_list]
-        
+
     ################################################################################
     ## Running a simulation
     ################################################################################
-    
+
     def freezeEquations(self):
         '''Replace symbolic parameters in equations with explicit values'''
         self.eqns = {k:v.subs({rate.sym:rate.value for rate in self.rates}) for k,v in self.eqns.items()}
         self.frozen = True
-        
+
     def unfreezeEquations(self):
         '''Reset equations to use symbolic parameters'''
         self.buildEquations()
         self.frozen = False
-        
+
     def updateParameters(self):
         """Wrap jitcode's set_paramters to set symbolic parameter values post-compilation"""
         if self.frozen: return
         self.ODE.set_parameters(*[rate.value for rate in self.rates])
-    
+
     def compileODE(self, integrator='dopri5', verbose=False, **kwargs):
         """
         Compile equations with selected integrator
-        
+
         Options for integrator include at least:
             'dopri5','RK45','dop853','RK23','BDF','lsoda','LSODA','Radau','vode'
         """
@@ -341,9 +345,9 @@ class CompetitiveReaction:
             self.ODE = jc.jitcode(self.eqns, verbose=verbose, **kwargs)
         else:
             self.ODE = jc.jitcode(self.eqns, control_pars=[rate.sym for rate in self.rates], verbose=verbose, **kwargs)
-        
+
         self.ODE.set_integrator(integrator)
-    
+
     def solveODE(self):
         """Initialize and run compiled solver"""
         inits = {v.y:v.init for v in self.strands+self.primers}
@@ -356,7 +360,7 @@ class CompetitiveReaction:
                 values[str(v)][i] = self.ODE.y_dict[v.y]
         self.solution = values
         return values
-    
+
     def timeIntegrators(self,integrators=['dopri5','RK45','dop853','RK23','BDF','lsoda','LSODA','Radau','vode'],
                         compilation_time=False, with_update=False):
         '''
@@ -411,30 +415,30 @@ class CompetitiveReaction:
             print()
         '''
         pass
-    
+
     ################################################################################
     ## Solution plotting functions
     ################################################################################
-           
-    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False):
+
+    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
         if INT is None: INT=self.sweep_INT
         if rng is None: rng=self.INT_rng
-        if res is None: res=self.INT_res 
-        
-        rng = np.arange(rng[0],rng[1]+res,res)
-        N = len(rng)
+        if res is None: res=self.INT_res
+        if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
+
+        N = len(pts)
         diffs = np.zeros(N)
-        iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
-            
-        solutions = {}
+        iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+
+        solutions = []
         for i,INT_0 in iterator:
             self.set_oligo_init(INT,10**INT_0)
             self.updateParameters()
-            solutions[INT_0] = self.solveODE()
+            solutions.append(self.solveODE())
             diffs[i] = self.get_diff()
         self.diffs=diffs
         return diffs, solutions
-    
+
     def INT_grid(self, INT1=None, INT2=None, progress_bar=True):
         if INT1 is None: INT1=self.INTs[0]
         if INT2 is None: INT2=self.INTs[1]
@@ -452,7 +456,7 @@ class CompetitiveReaction:
                 self.solveODE()
                 diffs[i,j] = self.get_diff()
         return diffs
-    
+
     def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True, cmap = FAM_HEX_cmap()):
         if INT1 is None: INT1=self.INTs[0]
         if INT2 is None: INT2=self.INTs[1]
@@ -471,8 +475,8 @@ class CompetitiveReaction:
 
         cbar = plt.colorbar(pcm,ticks=np.arange(-ext,ext+0.5,0.5))#, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
         #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
-        #cbar_x0s.ax.tick_params(labelsize=16) 
-        cntr = ax.contour(rng,rng,diffs.T,colors = 'k', 
+        #cbar_x0s.ax.tick_params(labelsize=16)
+        cntr = ax.contour(rng,rng,diffs.T,colors = 'k',
                            #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
                           )
         plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
@@ -480,24 +484,26 @@ class CompetitiveReaction:
         ax.set_xlabel('log10 '+str(INT1))
         ax.set_ylabel('log10 '+str(INT2))
         return diffs
-    
+
     def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
         # TODO: Allow target axis to be specified for individual plots
         # TODO: Plot total signal for each label
-        
+
         if INT is None: INT=self.sweep_INT
         if rng is None: rng=self.INT_rng
-        if res is None: res=self.INT_res 
-        
+        if res is None: res=self.INT_res
+
         diffs, sweep_solutions = self.INT_sweep(INT=INT, rng=rng, res=res, progress_bar=progress_bar)
-        
+
         if ax is not None: indiv=False
-        
+
+        pts = np.arange(rng[0],rng[1]+res,res)
+
         if indiv:
-            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,annotate=annotate)
+            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,pts,annotate=annotate)
             ax = fig.add_subplot(gs[:,3:])
             self.sweep_ax = ax
-        
+
         if update:
             if self.sweep_ax is None:
                 _,self.sweep_ax = self.plotDiffs(diffs)
@@ -507,12 +513,12 @@ class CompetitiveReaction:
             if ax is None:
                 fig,ax = plt.subplots(1,1)
             _,self.sweep_ax = self.plotDiffs(diffs,ax=ax)
-            
+
         if annotate in [True,'Inner','Outer']:
             self.annotate_diff_plot(self.sweep_ax,pos=annotate)
-            
+
         return diffs
-    
+
     def plotDiffs(self,diffs=None,ax=None,rng=None,res=None):
         if diffs is None: diffs = self.diffs
         if rng is None: rng = self.INT_rng
@@ -520,7 +526,7 @@ class CompetitiveReaction:
         fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
         INT = self.sweep_INT
         rng = np.arange(rng[0],rng[1]+res,res)
-            
+
         ax.plot(rng,diffs, color=grey(), zorder=0)
         ax.scatter(rng,diffs, c=diffs, cmap=FAM_HEX_cmap(),
                    s=10**2, edgecolor=grey(), zorder=1,
@@ -533,7 +539,7 @@ class CompetitiveReaction:
             'xlabel' : f'log10 {INT} copies',
         })
         return fig, ax
-    
+
     def updateDiffs(self,ax, diffs=None, rng=None, res=None):
         if diffs is None: diffs = self.diffs
         if rng is None: rng = self.INT_rng
@@ -546,17 +552,24 @@ class CompetitiveReaction:
         for txt in txts: txt.remove()
         ax.figure.canvas.draw()
         print(self.get_diff_stats())
-        
+
     def get_diff(self):
-        return (sum(self.solution[L1][-1] for L1 in self.list('label1_strands'))-
-                sum(self.solution[L2][-1] for L2 in self.list('label2_strands')))/self.norm
-    
+        '''
+        Gets the endpoint signal difference from the current solution
+
+        Currently, this is defined by "convention" as the intensity of the alphabetically
+        first label (typically FAM) subtracted from the intensity of the second label
+        (typically HEX). Obviously, this is very fragile and inflexible and should be fixed ASAP.
+        '''
+        return (sum(self.solution[L2][-1] for L2 in self.list('label2_strands'))-
+                sum(self.solution[L1][-1] for L1 in self.list('label1_strands')))/self.norm
+
     def get_diff_stats(self, diffs=None,rng=None):
         if diffs is None: diffs=self.diffs
         if rng is None: rng = self.INT_rng
         res = self.INT_res
         rng = np.arange(rng[0],rng[1]+res,res)
-        
+
         interp_res=0.01
         wt_interp = np.arange(rng[0],rng[-1]+interp_res,interp_res)
         diff_interp = np.interp(wt_interp,rng,diffs)
@@ -564,7 +577,7 @@ class CompetitiveReaction:
         diff0 = np.argmin(abs(diff_interp))
         diff90 = (np.max(diff_interp)-np.min(diff_interp))*0.9+np.min(diff_interp)
         diff10 = (np.max(diff_interp)-np.min(diff_interp))*0.1+np.min(diff_interp)
-        
+
         stats = {
             'Zero' : wt_interp[diff0],
             'DR' : np.abs(wt_interp[np.argmin(abs(diff_interp-diff10))] - wt_interp[np.argmin(abs(diff_interp-diff90))]),
@@ -572,7 +585,7 @@ class CompetitiveReaction:
             'Min' : np.min(diffs),
         }
         return stats
-        
+
     def annotate_diff_plot(self,ax,diffs=None,rng=None,pos='Outer'):
         if diffs is None: diffs=self.diffs
         if rng is None: rng=self.INT_rng
@@ -583,7 +596,7 @@ class CompetitiveReaction:
             x_pos = 1.05
         elif pos is 'Inner':
             x_pos = 0.025
-        
+
         ax.annotate(f'Zero: {stats["Zero"]:.2f}',
                      xy=(x_pos, .925), xycoords='axes fraction',
                      horizontalalignment='left')
@@ -599,39 +612,39 @@ class CompetitiveReaction:
         ax.annotate(f'Min: {stats["Min"]:.2f}',
                      xy=(x_pos, .625), xycoords='axes fraction',
                      horizontalalignment='left')
-        
+
     def plotTraces(self,ax=None,solution=None):
         fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
         if solution is None: solution = self.solution
         L1s = self.list('label1_strands')
         L2s = self.list('label2_strands')
         for i,L1 in enumerate(L1s):
-            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(1-(len(L1s)-(i+1))*0.3))
+            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(0+(len(L1s)-(i+1))*0.3))
         for i,L2 in enumerate(L2s):
-            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(0+(len(L2s)-(i+1))*0.3))
+            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(1-(len(L2s)-(i+1))*0.3))
         return fig, ax
-            
-    def plotTracesGrid(self,solution_dict,annotate=True):
+
+    def plotTracesGrid(self,solution_list,conc_list,annotate=True):
         fig = plt.figure(constrained_layout=True,figsize=[16,5])
-        N = len(solution_dict)
+        N = len(solution_list)
         gs = fig.add_gridspec(N//3+1,6)
         ind_axs = []
         INT = self.sweep_INT
-        for i,(INT_0, solution) in enumerate(solution_dict.items()):
+        for i,(solution,conc) in enumerate(zip(solution_list,conc_list)):
             with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
                 ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
                 self.plotTraces(ax=ind_axs[i],solution=solution)
                 plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
                 plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
                 if annotate in [True,'Inner','Outer']:
-                    plt.annotate(f'{INT_0:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
+                    plt.annotate(f'{conc:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
                 if (i%3==0)&(i//3+1==(N-1)//3+1):
                     plt.setp(ind_axs[i],**{
                         'ylabel' : 'Norm Signal',
                         'xlabel' : 'Cycles',
                     })
         return fig, gs, ind_axs
-    
+
     ################################################################################
     ## Interactive configurations with simulating and plotting
     ################################################################################
@@ -644,7 +657,7 @@ class CompetitiveReaction:
                 label = self.list('labels')[0]
             elif '_'.join(idx) in self.select_label2.value:
                 label = self.list('labels')[1]
-            else: 
+            else:
                 label = ''
             self.connections.at[idx,'Label'] = label
         self.buildLabels()
@@ -668,7 +681,7 @@ class CompetitiveReaction:
         return
 
     def interactive(self):
-        ui_concentrations = ipw.interactive(self.interactive_solve, #{'manual': True}, 
+        ui_concentrations = ipw.interactive(self.interactive_solve, #{'manual': True},
                  **{
                      str(rate):ipw.FloatSlider(min=0.1, max=1.1, step=0.05, value=rate.value,
                                                description=f'{str(rate)[2:]} rate', continuous_update=False)
@@ -689,29 +702,29 @@ class CompetitiveReaction:
                  plt_rslt=ipw.Checkbox(value=False, description='Plot Result'),
                  indiv=ipw.Checkbox(value=False, description='Individual Traces'),
             )
-        
+
         self.INT_rng_widget=ipw.FloatRangeSlider(min=0, max=10, step=0.1, value=self.INT_rng,
                                           description=f"{self.list('INTs')[0]} range", continuous_update=False)
-        
+
         self.select_label1 = ipw.SelectMultiple(options = self.list('strands')+['None',], value = self.list('label1_strands'),
                                                 description = f'Label {self.list("labels")[0]:}')
         self.select_label2 = ipw.SelectMultiple(options = self.list('strands')+['None',], value = self.list('label2_strands'),
-                                                description = f'Label {self.list("labels")[1]:}')        
-                                            
+                                                description = f'Label {self.list("labels")[1]:}')
+
         n_oligos = len(self.oligos)
         n_primers = len(self.primers)
         n_EXTs = len(self.EXTs)
-        
+
         col1 = n_oligos
         col2 = col1+n_primers
         col3 = col2+n_EXTs
         col4 = col3+2
-        
+
         rate_widgets = ui_concentrations.children[:col1]
         primer_widgets = ui_concentrations.children[col1:col2]
         EXT_widgets = list(ui_concentrations.children[col2:col3])
         INT_widgets = [self.INT_rng_widget]
-        
+
         if len(self.list('INTs'))>1:
             self.INT_selector = ipw.RadioButtons(options = self.list('INTs'), description = 'Sweep:')
             self.INT_conc_widgets = [ipw.FloatSlider(min=0, max=10, step=0.25, value=np.log10(self.get_oligo_init(INT)),
@@ -726,21 +739,21 @@ class CompetitiveReaction:
                     widg.value=np.log10(self.get_oligo_init(INT))
             self.INT_selector.observe(update_INT_widgets,'value')
             INT_widgets.append(self.INT_selector)
-        
+
         oligo_widgets = EXT_widgets + INT_widgets
-        
+
         display(ipw.HBox([
             ipw.VBox(rate_widgets),
             ipw.VBox(primer_widgets),
             ipw.VBox(EXT_widgets),
             ipw.VBox(INT_widgets)
         ]))
-            
+
         display(ipw.HBox([
             self.select_label1,
-            self.select_label2, 
+            self.select_label2,
             ipw.VBox(ui_concentrations.children[col3:col4]),
             ipw.VBox(ui_concentrations.children[col4:-1]),
         ]))
-        
+
         display(ui_concentrations.children[-1])#Show the output
