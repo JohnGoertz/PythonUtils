@@ -430,11 +430,11 @@ class CompetitiveReaction:
         diffs = np.zeros(N)
         iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
             
-        solutions = {}
+        solutions = []
         for i,INT_0 in iterator:
             self.set_oligo_init(INT,10**INT_0)
             self.updateParameters()
-            solutions[INT_0] = self.solveODE()
+            solutions.append(self.solveODE())
             diffs[i] = self.get_diff()
         self.diffs=diffs
         return diffs, solutions
@@ -497,8 +497,10 @@ class CompetitiveReaction:
         
         if ax is not None: indiv=False
         
+        pts = np.arange(rng[0],rng[1]+res,res)
+        
         if indiv:
-            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,annotate=annotate)
+            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,pts,annotate=annotate)
             ax = fig.add_subplot(gs[:,3:])
             self.sweep_ax = ax
         
@@ -622,20 +624,20 @@ class CompetitiveReaction:
             ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(1-(len(L2s)-(i+1))*0.3))
         return fig, ax
             
-    def plotTracesGrid(self,solution_dict,annotate=True):
+    def plotTracesGrid(self,solution_list,conc_list,annotate=True):
         fig = plt.figure(constrained_layout=True,figsize=[16,5])
-        N = len(solution_dict)
+        N = len(solution_list)
         gs = fig.add_gridspec(N//3+1,6)
         ind_axs = []
         INT = self.sweep_INT
-        for i,(INT_0, solution) in enumerate(solution_dict.items()):
+        for i,(solution,conc) in enumerate(zip(solution_list,conc_list)):
             with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
                 ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
                 self.plotTraces(ax=ind_axs[i],solution=solution)
                 plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
                 plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
                 if annotate in [True,'Inner','Outer']:
-                    plt.annotate(f'{INT_0:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
+                    plt.annotate(f'{conc:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
                 if (i%3==0)&(i//3+1==(N-1)//3+1):
                     plt.setp(ind_axs[i],**{
                         'ylabel' : 'Norm Signal',
