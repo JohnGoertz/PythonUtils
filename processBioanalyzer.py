@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
+import scipy.signal as sig
+import warnings
 
 from . import myUtils as mypy
 
@@ -71,10 +73,72 @@ def importPeaks(data_pth, prefix, suffix=None, ext = '.csv', header = 13, skip_i
     return peaks
 
 ###############################################################################
+# Conversions
+###############################################################################
+
+def calibrate(traces,kit='DNA1000'):
+    ladder = traces[traces['Sample']=='Ladder'].squeeze()
+    kit = kit.casefold()
+    
+    pks_bp = {
+        'dna1000' : [15,25,50,100,150,200,300,400,500,700,850,1000,1500],
+        'dna7500' : [50,100,300,500,700,1000,1500,2000,3000,5000,7000,10380]
+    }
+
+    valid_bp_rng = {
+        'dna1000' : [25,1000],
+        'dna7500' : [100,7500],
+    }
+    
+    pks_bp = pks_bp[kit]
+    valid_bp_rng = valid_bp_rng[kit]
+    pks,_ = sig.find_peaks(ladder.Value,height=10)
+    t = np.array(ladder.Time)
+    pks_s = t[pks]
+
+    #plt.plot(ladder.Time,ladder.Value)
+    #plt.plot(np.array(ladder.Time)[pks],np.array(ladder.Value)[pks],'o')
+    #plt.plot(pks_s,pks_bp,'o')
+
+    res = 0.01
+    t_interp = np.arange(t.min(),t.max()+res,res)
+    bp_interp = np.interp(t_interp,pks_s,pks_bp)
+    
+    def bp_to_s(bp, validate=True):
+        if validate:
+            assert (bp>=min(pks_bp))&(bp<=max(pks_bp)), f'Cannot extrapolate below {min(pks_bp)} or above {max(pks_bp)} bp'
+            if (bp<min(valid_bp_rng))|(bp>max(valid_bp_rng)):
+                warnings.warn(f'Input outside valid sizing range: {valid_bp_rng[0]}-{valid_bp_rng[1]} bp')
+        return t_interp[np.argmin(np.abs(bp_interp-bp))]
+        
+    valid_t_rng = [bp_to_s(bp, validate=False) for bp in valid_bp_rng]
+
+    def s_to_bp(s, validate=True):
+        if validate:
+            assert (s>=min(pks_s))&(s<=max(pks_s)), f'Cannot extrapolate below {min(pks_s)} or above {max(pks_s)} s'
+            if (s<min(valid_t_rng))|(s>max(valid_t_rng)):
+                warnings.warn(f'Input outside valid sizing range: {valid_t_rng[0]:.2f}-{valid_t_rng[1]:.2f} s')
+        return bp_interp[np.argmin(np.abs(t_interp-s))]
+
+    return bp_to_s, s_to_bp
+
+###############################################################################
 # Plotting
 ###############################################################################
 
-def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], skip_ladder=True, stagger_labels=False):
+def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], bp_min = -np.inf, bp_max = np.inf, skip_ladder=True, stagger_labels=False):
+    
+    t = traces.iloc[0].Time
+    
+    t_rng = [np.min(t),np.max(t)]
+    
+    bp_to_s,_ = calibrate(traces)
+    
+    if bp_min>-np.inf:
+        t_rng[0] = bp_to_s(bp_min)
+    if bp_max<np.inf:
+        t_rng[1] = bp_to_s(bp_max)
+    
     for i,trace in traces.iterrows():
         
         if i in skip_traces: continue
@@ -87,11 +151,11 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], s
 
         plt.plot(trace.Time,trace.Value/norm+i,color=trace.Color)
         plt.annotate(trace.Sample,
-                     xy = (trace.Time[-1]-1, trace.Value[-1]/norm+i+0.1),
+                     xy = (t_rng[1]-1, trace.Value[np.argmin(np.abs(t-t_rng[1]))]/norm+i+0.1),
                      horizontalalignment='right', fontsize=14)    
-
+            
     plt.setp(plt.gca(),
-             xlim = [np.min(trace.Time),np.max(trace.Time)],
+             xlim = t_rng,
              yticks = [],
              xticks = []
             )
@@ -103,14 +167,24 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], s
     gray=[0.75, 0.75, 0.75]
     for i,bp in enumerate(label_peaks):
         if bp in skip_peaks: continue
+        if (bp<bp_min)|(bp>bp_max): continue
             
-        t = peaks[peaks['Size [bp]']==bp]['Aligned Migration Time [s]'].mean()
+        pk = peaks[peaks['Size [bp]']==bp]
+        t = pk['Aligned Migration Time [s]'].mean()
         plt.axvline(t, color=gray, linestyle='--', zorder=-1)
         labely = (i % 2 -1)/20-0.025 if stagger_labels else -0.025
+        
         plt.annotate(bp, xy=(t,labely), 
                      xycoords=trans, ha="center", va="top", fontsize=14)
+        if all(pk['Upper Marker']):
+            plt.annotate('UM', xy=(t,labely-1/20), 
+                     xycoords=trans, ha="center", va="top", fontsize=14)
+        if all(pk['Lower Marker']):
+            plt.annotate('LM', xy=(t,labely-1/20), 
+                     xycoords=trans, ha="center", va="top", fontsize=14)
         
-    plt.annotate('bp', xy=(trace.Time[-1]-1,-0.025),
+    plt.annotate('bp', xy=(max(t_rng)-1,-0.025-stagger_labels/20/2),
                  xycoords=trans, ha="right", va="top", fontsize=14)
+        
     
     return
