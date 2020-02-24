@@ -22,8 +22,13 @@ def importTraces(data_pth, prefix, suffix=None, ext = '.csv', header = 13):
     n_pts = int(header['Number of Events'])
 
     ladder = pd.read_csv(data_pth / ladder_file, header = len_header).iloc[:-1].astype(float)
-    lanes = [pd.Series(ladder.to_dict('list'), name='Ladder')]
+    ladder = pd.Series(ladder.to_dict('list'), name='Ladder')
+    ladder.Time = np.array(ladder.Time)
+    ladder.Value = np.array(ladder.Value)
+    ladder['Color'] = 'k'
+    lanes = [ladder]
     assert len(ladder.Value) == n_pts
+    
     for i in range(n_samples):
         sample_file = prefix + f'_Sample{i+1}_' + suffix + ext
 
@@ -31,6 +36,10 @@ def importTraces(data_pth, prefix, suffix=None, ext = '.csv', header = 13):
         sample = pd.read_csv(data_pth / sample_file, header = len_header).iloc[:-1].astype(float)
         
         lane = pd.Series(sample.to_dict('list'), name=header['Sample Name'])
+        
+        lane.Time = np.array(lane.Time)
+        lane.Value = np.array(lane.Value)
+        lane['Color'] = f'C{i}'
         lanes.append(lane)
         assert len(sample.Value) == n_pts
 
@@ -109,7 +118,7 @@ def calibrate(traces,kit='DNA1000'):
             assert (bp>=min(pks_bp))&(bp<=max(pks_bp)), f'Cannot extrapolate below {min(pks_bp)} or above {max(pks_bp)} bp'
             if (bp<min(valid_bp_rng))|(bp>max(valid_bp_rng)):
                 warnings.warn(f'Input outside valid sizing range: {valid_bp_rng[0]}-{valid_bp_rng[1]} bp')
-        return t_interp[np.argmin(np.abs(bp_interp-bp))]
+        return t_interp[closest(bp_interp,bp)]
         
     valid_t_rng = [bp_to_s(bp, validate=False) for bp in valid_bp_rng]
 
@@ -118,9 +127,42 @@ def calibrate(traces,kit='DNA1000'):
             assert (s>=min(pks_s))&(s<=max(pks_s)), f'Cannot extrapolate below {min(pks_s)} or above {max(pks_s)} s'
             if (s<min(valid_t_rng))|(s>max(valid_t_rng)):
                 warnings.warn(f'Input outside valid sizing range: {valid_t_rng[0]:.2f}-{valid_t_rng[1]:.2f} s')
-        return bp_interp[np.argmin(np.abs(t_interp-s))]
+        return bp_interp[closest(t_interp,s)]
 
     return bp_to_s, s_to_bp
+
+
+def getHeights(samples, peaks, peak_list, traces=None, tol=10):
+    heights = np.zeros([len(samples),len(peak_list)])
+    ref_q = np.zeros(len(samples))
+
+    for i,row in samples.reset_index().iterrows():
+        
+        ref_q[i] = row['Tar_Q']
+
+        these_peaks = peaks[peaks['Sample']==row['Sample']]
+        if traces is not None:
+            trace = traces[traces['Sample']==row['Sample']].iloc[0]
+            bp_to_s,_ = calibrate(traces)
+        for j,pk in enumerate(peak_list):
+            closest_peak = closest(these_peaks['Size [bp]'],pk)
+            bkg = trace.Value[closest(trace.Time,bp_to_s(pk))] if traces is not None else 0
+            heights[i,j] = these_peaks.loc[closest_peak,'Peak Height'] if np.abs(these_peaks.loc[closest_peak,'Size [bp]']-pk)<tol else bkg
+        
+    return ref_q,heights
+
+
+def closest(lst,val,check_all=True):
+    if type(lst) is pd.Series:
+        idx = (lst-val).abs().idxmin()
+    else:
+        idx = np.argmin(np.abs(lst-val))
+    if check_all:
+        matches = [i for i,v in enumerate(lst) if v==lst[idx]]
+        n_matches = len(matches)
+        if n_matches>1:
+            warnings.warn(f'{n_matches} elements ({matches}) are equidistant to input value')
+    return idx
 
 ###############################################################################
 # Plotting
@@ -151,7 +193,7 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], b
 
         plt.plot(trace.Time,trace.Value/norm+i,color=trace.Color)
         plt.annotate(trace.Sample,
-                     xy = (t_rng[1]-1, trace.Value[np.argmin(np.abs(t-t_rng[1]))]/norm+i+0.1),
+                     xy = (t_rng[1]-1, trace.Value[closest(t,t_rng[1])]/norm+i+0.1),
                      horizontalalignment='right', fontsize=14)    
             
     plt.setp(plt.gca(),
