@@ -148,8 +148,8 @@ def calibrate(ladder_peaks, kit='DNA1000'):
     return bp_to_s, s_to_bp
 
 
-def getHeights(samples, peaks, peak_list, traces=None, tol=10, kit='DNA1000'):
-    heights = np.zeros([len(samples),len(peak_list)])
+def getFeature(samples, peaks, peak_list, feature, traces=None, tol=10, kit='DNA1000'):
+    vals = np.zeros([len(samples),len(peak_list)])
     ref_q = np.zeros(len(samples))
 
     if traces is not None:
@@ -166,9 +166,9 @@ def getHeights(samples, peaks, peak_list, traces=None, tol=10, kit='DNA1000'):
         for j,pk in enumerate(peak_list):
             closest_peak = closest(these_peaks['Size [bp]'],pk)
             bkg = trace.Value[closest(trace.Time,bp_to_s(pk))] if traces is not None else 0
-            heights[i,j] = these_peaks.loc[closest_peak,'Peak Height'] if np.abs(these_peaks.loc[closest_peak,'Size [bp]']-pk)<tol else bkg
+            vals[i,j] = these_peaks.loc[closest_peak,feature] if np.abs(these_peaks.loc[closest_peak,'Size [bp]']-pk)<tol else bkg
         
-    return ref_q,heights
+    return ref_q,vals
 
 
 def closest(lst,val,check_all=True):
@@ -187,7 +187,8 @@ def closest(lst,val,check_all=True):
 # Plotting
 ###############################################################################
 
-def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], bp_min = -np.inf, bp_max = np.inf, skip_ladder=True, stagger_labels=False, kit='DNA1000'):
+def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_peaks=[], bp_min = -np.inf, bp_max = np.inf,
+               skip_ladder=True, stagger_labels=False, kit='DNA1000'):
     
     t = traces.iloc[0].Time
     
@@ -201,7 +202,8 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], b
     if bp_max<=kit_pks(kit)[-1]:
         t_rng[1] = bp_to_s(bp_max)
         
-    _,ax = plt.subplots()
+    
+    if ax is None: _,ax = plt.subplots()
     ax.set_xlim(t_rng)
     
     # coordinate transform for annotations
@@ -222,7 +224,7 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], b
         labely = trace.Value[closest(t,t_rng[1])]/norm+i+0.1
         plt.annotate(trace.Sample,
                      xy = (0.99, labely), xycoords=ytrans,
-                     horizontalalignment='right', fontsize=14)    
+                     horizontalalignment='right', fontsize=18)    
             
     plt.setp(plt.gca(),
              xlim = t_rng,
@@ -243,16 +245,16 @@ def plotTraces(traces, peaks, skip_traces=[], label_peaks=None, skip_peaks=[], b
         labely = (i % 2 -1)/20-0.025 if stagger_labels else -0.025
         
         plt.annotate(bp, xy=(t,labely), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=14)
+                     xycoords=xtrans, ha="center", va="top", fontsize=18)
         if all(pk['Upper Marker']):
             plt.annotate('UM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=14)
+                     xycoords=xtrans, ha="center", va="top", fontsize=18)
         if all(pk['Lower Marker']):
             plt.annotate('LM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=14)
+                     xycoords=xtrans, ha="center", va="top", fontsize=18)
         
     plt.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
-                 xycoords='axes fraction', ha="right", va="top", fontsize=14)
+                 xycoords='axes fraction', ha="right", va="top", fontsize=18)
         
     return plt.gca()
 
@@ -274,7 +276,7 @@ def GelLikeImage(traces, peaks, skip_traces=[], label_peaks=[], skip_peaks=[],
     )
     
     labelprops = dict(
-        fontsize=14
+        fontsize=18
     )
             
     im_kwargs.update({k:v for k,v in laneprops.items() if k not in im_kwargs.keys()})
@@ -408,7 +410,7 @@ def peak_box(bp, bp_to_s, GLI_fig, height=30, bias=0.6, lr_pad=0.0125,
     if label is not None:
         
         labelprops = dict(
-            fontsize=14
+            fontsize=18
         )
 
         label_kwargs.update({k:v for k,v in labelprops.items() if k not in label_kwargs.keys()})
