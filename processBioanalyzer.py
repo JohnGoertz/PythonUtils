@@ -150,17 +150,20 @@ def calibrate(ladder_peaks, kit='DNA1000'):
     return bp_to_s, s_to_bp
 
 
-def getFeature(samples, peaks, peak_list, feature, traces=None, tol=10, kit='DNA1000'):
+def getFeature(samples, peaks, peak_list, feature, label=None, traces=None, tol=10, kit='DNA1000'):
     vals = np.zeros([len(samples),len(peak_list)])
-    ref_q = np.zeros(len(samples))
+    labels = np.zeros(len(samples))
 
     if traces is not None:
         ladder_peaks = getLadderPeaks(traces, kit)
         bp_to_s, _ = calibrate(ladder_peaks, kit)
     
     for i,row in samples.reset_index().iterrows():
-        
-        ref_q[i] = row['Tar_Q']
+
+        if label is not None:
+            labels[i] = row[label]
+        else:
+            labels[i] = i
 
         these_peaks = peaks[peaks['Sample']==row['Sample']]
         if traces is not None:
@@ -170,7 +173,7 @@ def getFeature(samples, peaks, peak_list, feature, traces=None, tol=10, kit='DNA
             bkg = trace.Value[closest(trace.Time,bp_to_s(pk))] if traces is not None else 0
             vals[i,j] = these_peaks.loc[closest_peak,feature] if np.abs(these_peaks.loc[closest_peak,'Size [bp]']-pk)<tol else bkg
         
-    return ref_q,vals
+    return labels,vals
 
 
 def closest(lst,val,check_all=True):
