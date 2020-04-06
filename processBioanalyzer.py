@@ -65,7 +65,9 @@ def importPeaks(data_pth, prefix, suffix=None, ext = '.csv', header = 13, skip_i
     peaks = []
     for i,(n,name) in enumerate(zip(n_peaks,sample_names)):
         lane = results.iloc[skip:skip+n+2].rename(columns={c:col for c,col in enumerate(columns)})
-        lane.replace(to_replace='1,500',value='1500',inplace=True)
+        for col in num_columns:
+            lane[col] = lane[col].str.replace(',', '')
+        lane.replace(to_replace=',',value='',inplace=True)
         lane.insert(0,'Sample',name)
         for marker in markers:
             lane.insert(1,marker,lane['Observations']==marker)
