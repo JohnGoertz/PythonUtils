@@ -70,7 +70,7 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
     
     teals = mpl.cm.get_cmap('BrBG',N*2)(np.linspace(0.5,0.9,N))
     oranges = mpl.cm.get_cmap('PuOr',N*2)(np.linspace(0.1,0.5,N))
-    concat_colors = np.vstack((oranges,teals))
+    concat_colors = np.vstack((oranges,teals))[::-1]
     cmap = mpl.colors.ListedColormap(concat_colors, name='OrBG')
 
     return cmap
@@ -166,7 +166,6 @@ class CompetitiveReaction:
     def get_rate(self, oligo):
         oligo = str(oligo)
         rate_name = 'r_'+oligo
-        assert rate>0, 'Rate must be greater than 0'
         assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
         return self.from_list('rates',rate_name).value
         
@@ -306,6 +305,11 @@ class CompetitiveReaction:
             self.set_primer_init(primer,dflt['primer_inits'])
     
     def buildLabels(self):
+        '''
+        Defines which strands are labeled with which fluorophores
+        
+        Takes the first label from the alphabetical list (typically FAM) and defines it as label1 and the second label as label1
+        '''
         label1_strands_list = ['_'.join(oligo) for oligo,row in self.connections.iterrows() if row.Label == self.list('labels')[0]]
         self.label1_strands = [self.from_list('strands',strand) for strand in label1_strands_list]
         label2_strands_list = ['_'.join(oligo) for oligo,row in self.connections.iterrows() if row.Label == self.list('labels')[1]]
@@ -416,21 +420,21 @@ class CompetitiveReaction:
     ## Solution plotting functions
     ################################################################################
            
-    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False):
+    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
         if INT is None: INT=self.sweep_INT
         if rng is None: rng=self.INT_rng
-        if res is None: res=self.INT_res 
-        
-        rng = np.arange(rng[0],rng[1]+res,res)
-        N = len(rng)
-        diffs = np.zeros(N)
-        iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
+        if res is None: res=self.INT_res
+        if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
             
-        solutions = {}
+        N = len(pts)
+        diffs = np.zeros(N)
+        iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+            
+        solutions = []
         for i,INT_0 in iterator:
             self.set_oligo_init(INT,10**INT_0)
             self.updateParameters()
-            solutions[INT_0] = self.solveODE()
+            solutions.append(self.solveODE())
             diffs[i] = self.get_diff()
         self.diffs=diffs
         return diffs, solutions
@@ -493,8 +497,10 @@ class CompetitiveReaction:
         
         if ax is not None: indiv=False
         
+        pts = np.arange(rng[0],rng[1]+res,res)
+        
         if indiv:
-            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,annotate=annotate)
+            fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,pts,annotate=annotate)
             ax = fig.add_subplot(gs[:,3:])
             self.sweep_ax = ax
         
@@ -548,8 +554,15 @@ class CompetitiveReaction:
         print(self.get_diff_stats())
         
     def get_diff(self):
-        return (sum(self.solution[L1][-1] for L1 in self.list('label1_strands'))-
-                sum(self.solution[L2][-1] for L2 in self.list('label2_strands')))/self.norm
+        '''
+        Gets the endpoint signal difference from the current solution
+        
+        Currently, this is defined by "convention" as the intensity of the alphabetically 
+        first label (typically FAM) subtracted from the intensity of the second label
+        (typically HEX). Obviously, this is very fragile and inflexible and should be fixed ASAP.
+        '''
+        return (sum(self.solution[L2][-1] for L2 in self.list('label2_strands'))-
+                sum(self.solution[L1][-1] for L1 in self.list('label1_strands')))/self.norm
     
     def get_diff_stats(self, diffs=None,rng=None):
         if diffs is None: diffs=self.diffs
@@ -606,25 +619,25 @@ class CompetitiveReaction:
         L1s = self.list('label1_strands')
         L2s = self.list('label2_strands')
         for i,L1 in enumerate(L1s):
-            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(1-(len(L1s)-(i+1))*0.3))
+            ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(0+(len(L1s)-(i+1))*0.3))
         for i,L2 in enumerate(L2s):
-            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(0+(len(L2s)-(i+1))*0.3))
+            ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(1-(len(L2s)-(i+1))*0.3))
         return fig, ax
             
-    def plotTracesGrid(self,solution_dict,annotate=True):
+    def plotTracesGrid(self,solution_list,conc_list,annotate=True):
         fig = plt.figure(constrained_layout=True,figsize=[16,5])
-        N = len(solution_dict)
+        N = len(solution_list)
         gs = fig.add_gridspec(N//3+1,6)
         ind_axs = []
         INT = self.sweep_INT
-        for i,(INT_0, solution) in enumerate(solution_dict.items()):
+        for i,(solution,conc) in enumerate(zip(solution_list,conc_list)):
             with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
                 ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
                 self.plotTraces(ax=ind_axs[i],solution=solution)
                 plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
                 plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
                 if annotate in [True,'Inner','Outer']:
-                    plt.annotate(f'{INT_0:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
+                    plt.annotate(f'{conc:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
                 if (i%3==0)&(i//3+1==(N-1)//3+1):
                     plt.setp(ind_axs[i],**{
                         'ylabel' : 'Norm Signal',
