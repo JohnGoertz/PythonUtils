@@ -190,7 +190,7 @@ def closest(lst,val,check_all=True):
 ###############################################################################
 
 def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_peaks=[], bp_min = -np.inf, bp_max = np.inf,
-               skip_ladder=True, stagger_labels=False, kit='DNA1000'):
+               skip_ladder=True, stagger_labels=False, kit='DNA1000', warnings=True):
     
     t = traces.iloc[0].Time
     
@@ -200,9 +200,9 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
     bp_to_s, _ = calibrate(ladder_peaks, kit)
     
     if bp_min>=kit_pks(kit)[0]:
-        t_rng[0] = bp_to_s(bp_min)
+        t_rng[0] = bp_to_s(bp_min, validate=warnings)
     if bp_max<=kit_pks(kit)[-1]:
-        t_rng[1] = bp_to_s(bp_max)
+        t_rng[1] = bp_to_s(bp_max, validate=warnings)
         
     
     if ax is None: _,ax = plt.subplots()
@@ -222,17 +222,17 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
     renorm = np.max([trace.Value/trace.Norm for _,trace in these_traces.iterrows()])
 
     # coordinate transform for annotations
-    xtrans = plt.gca().get_xaxis_transform() # x in data units, y in axes fraction
-    ytrans = plt.gca().get_yaxis_transform() # y in data units, x in axes fraction
+    xtrans = ax.get_xaxis_transform() # x in data units, y in axes fraction
+    ytrans = ax.get_yaxis_transform() # y in data units, x in axes fraction
     for i, trace in these_traces.iterrows():
         y = trace.Value/trace.Norm/renorm
-        plt.plot(trace.Time,y+i,color=trace.Color)
+        ax.plot(trace.Time,y+i,color=trace.Color)
         labely = y[closest(t,t_rng[1])]+i+0.1
-        plt.annotate(trace.Sample,
+        ax.annotate(trace.Sample,
                      xy = (0.99, labely), xycoords=ytrans,
                      horizontalalignment='right', fontsize=18)    
             
-    plt.setp(plt.gca(),
+    plt.setp(ax,
              xlim = t_rng,
              yticks = [],
              xticks = []
@@ -250,24 +250,24 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
             t = bp_to_s(bp)
         else:
             t = pk['Aligned Migration Time [s]'].mean()
-        plt.axvline(t, color=gray, linestyle='--', zorder=-1)
+        ax.axvline(t, color=gray, linestyle='--', zorder=-1)
         labely = (i % 2 -1)/20-0.025 if stagger_labels else -0.025
         
-        plt.annotate(bp, xy=(t,labely), 
+        ax.annotate(bp, xy=(t,labely),
                      xycoords=xtrans, ha="center", va="top", fontsize=18)
 
         if not pk.empty:
             if all(pk['Upper Marker']):
-                plt.annotate('UM', xy=(t,labely-1/20),
+                ax.annotate('UM', xy=(t,labely-1/20),
                          xycoords=xtrans, ha="center", va="top", fontsize=18)
             if all(pk['Lower Marker']):
-                plt.annotate('LM', xy=(t,labely-1/20),
+                ax.annotate('LM', xy=(t,labely-1/20),
                          xycoords=xtrans, ha="center", va="top", fontsize=18)
         
-    plt.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
+    ax.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
                  xycoords='axes fraction', ha="right", va="top", fontsize=18)
         
-    return plt.gca()
+    return ax
 
 
 def GelLikeImage(traces, peaks, skip_traces=[], label_peaks=[], skip_peaks=[],
