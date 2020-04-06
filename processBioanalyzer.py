@@ -208,10 +208,6 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
     if ax is None: _,ax = plt.subplots()
     ax.set_xlim(t_rng)
     
-    # coordinate transform for annotations
-    xtrans = plt.gca().get_xaxis_transform() # x in data units, y in axes fraction
-    ytrans = plt.gca().get_yaxis_transform() # y in data units, x in axes fraction
-    
     for i,trace in traces.iterrows():
         
         if i in skip_traces: continue
@@ -220,10 +216,18 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
         these_peaks = (peaks['Sample'] == trace['Sample'])
         UM = these_peaks & peaks['Upper Marker']
         LM = these_peaks & peaks['Lower Marker']
-        norm = np.mean([peaks[M]['Peak Height'].values[0] for M in [UM,LM]])
+        traces.at[i,'Norm'] = np.mean([peaks[M]['Peak Height'].values[0] for M in [UM,LM]])
 
-        plt.plot(trace.Time,trace.Value/norm+i,color=trace.Color)
-        labely = trace.Value[closest(t,t_rng[1])]/norm+i+0.1
+    these_traces = traces[traces.Norm.notna()]
+    renorm = np.max([trace.Value/trace.Norm for _,trace in these_traces.iterrows()])
+
+    # coordinate transform for annotations
+    xtrans = plt.gca().get_xaxis_transform() # x in data units, y in axes fraction
+    ytrans = plt.gca().get_yaxis_transform() # y in data units, x in axes fraction
+    for i, trace in these_traces.iterrows():
+        y = trace.Value/trace.Norm/renorm
+        plt.plot(trace.Time,y+i,color=trace.Color)
+        labely = y[closest(t,t_rng[1])]+i+0.1
         plt.annotate(trace.Sample,
                      xy = (0.99, labely), xycoords=ytrans,
                      horizontalalignment='right', fontsize=18)    
@@ -242,18 +246,23 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
         if (bp<bp_min)|(bp>bp_max): continue
             
         pk = peaks[peaks['Size [bp]']==bp]
-        t = pk['Aligned Migration Time [s]'].mean()
+        if pk.empty:
+            t = bp_to_s(bp)
+        else:
+            t = pk['Aligned Migration Time [s]'].mean()
         plt.axvline(t, color=gray, linestyle='--', zorder=-1)
         labely = (i % 2 -1)/20-0.025 if stagger_labels else -0.025
         
         plt.annotate(bp, xy=(t,labely), 
                      xycoords=xtrans, ha="center", va="top", fontsize=18)
-        if all(pk['Upper Marker']):
-            plt.annotate('UM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=18)
-        if all(pk['Lower Marker']):
-            plt.annotate('LM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=18)
+
+        if not pk.empty:
+            if all(pk['Upper Marker']):
+                plt.annotate('UM', xy=(t,labely-1/20),
+                         xycoords=xtrans, ha="center", va="top", fontsize=18)
+            if all(pk['Lower Marker']):
+                plt.annotate('LM', xy=(t,labely-1/20),
+                         xycoords=xtrans, ha="center", va="top", fontsize=18)
         
     plt.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
                  xycoords='axes fraction', ha="right", va="top", fontsize=18)
