@@ -3,12 +3,14 @@ import numpy as np
 import pandas as pd
 import seaborn as sns
 import scipy.stats as stat
+import lmfit as lf
+import copy as cp
+from scipy.integrate import odeint
 import scipy.optimize as opt
 import warnings
 
 from . import myUtils as mypy
 
-###############################################################################
 #%% Import Data
 
 def importQuantStudio(data_pth, data_file, *,
@@ -59,152 +61,7 @@ def importQuantStudio(data_pth, data_file, *,
         df = df[df.Well.isin(wells)]
     
     return imps
-    
-def reshapeQS_SNX(targets, n_r, *, quantities = None,
-                  setup = None, raw = None, data = None, instr_results = None):
-    
-    #Number of cycles (n_c) and array of cycle numbers (c)
-    c = mypy.uniq(data.Cycle)
-    n_c = c.size
-    
-    #Number of targets
-    n_t = len(targets)
-    
-    #Number of quantities (n_q) and logged quantities (lg_q)
-    if quantities is None:
-        quantities = mypy.uniq(setup.Quantity[setup.TargetName.isin(targets)]).sort[::-1]
-        
-    n_q = len(quantities)
-    
-    n_c = len(c)
-    well_map, ct_instr,thresh_instr = [np.zeros([n_t,n_q,n_r]) for _ in range(3)]
-    Rn, dRn = [np.zeros([n_t,n_q,n_r,n_c]) for _ in range(2)]
-    
-    # Rearrange data into four-dimensional matrix
-    #   Dim1 -> targets
-    #   Dim2 -> concentrations
-    #   Dim3 -> replicates
-    #   Dim4 -> cycle data
-    for (t,q,r) in np.ndindex(n_t,n_q,n_r):
-        setup_mask = (setup.TargetName == targets[t]) & (setup.Quantity == quantities[q])
-        
-        if sum(setup_mask) == n_r:
-            well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
-        else:
-            warnings.warn(f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}')
-            continue
-        
-        
-        data_mask = (data.Well == well_map[t,q,r]) & (data.TargetName == targets[t])
-        assert sum(data_mask) == n_c
-        
-        Rn[t,q,r,:] = data.Rn[data_mask]
-        dRn[t,q,r,:] = data.DeltaRn[data_mask]
-        
-        result = instr_results[(instr_results.Well == well_map[t,q,r]) &
-                               (instr_results.TargetName == targets[t])]
-        ct_instr[t,q,r] = result.CT
-        thresh_instr[t,q,r] = result.CtThreshold
-        
-    return {'c'             : c,
-            'n_t'           : n_t,
-            'n_q'           : n_q,
-            'lg_q'          : np.log10(quantities),
-            'well_map'      : well_map,
-            'dRn'           : dRn,
-            'ct_instr'      : ct_instr,
-            'thresh_instr'  : thresh_instr}
 
-
-def reshapeQS_MUX(targets, fluors, n_r, *, delin = ' - ',
-                  setup = None, raw = None, data = None, instr_results = None):
-    
-    #Number of cycles (n_c) and array of cycle numbers (c)
-    c = mypy.uniq(data.Cycle)
-    n_c = c.size
-    
-    #Number of targets
-    n_t = len(targets)
-    
-    #Number of fluorophores
-    n_f = len(fluors)
-    
-    n_c = len(c)
-    
-    # Rearrange data into multi-dimensional matrix
-    #   Dim1 -> targets
-    #   Dim2 -> concentrations
-    #   Dim3 -> replicates
-    #   Dim4 -> fluorophore
-    #   Dim5 -> cycle data
-    
-    # Use the quantities in the first fluorophore listed to map the wells to the array
-    #Number of quantities (n_q)
-    q_mask = (setup.TargetName.str.contains(targets[0], regex = False)) & \
-             (setup.TargetName.str.contains(fluors[0], regex = False))
-    quantities = np.sort(mypy.uniq(setup.Quantity[q_mask]))[::-1]
-    n_q = len(quantities)
-    
-    well_map = np.zeros([n_t,n_q,n_r])
-    
-    for (t,q,r) in np.ndindex(n_t,n_q,n_r):
-        tar = targets[t] + delin + fluors[0]
-        setup_mask = (setup.TargetName.str.match(tar)) & \
-                     (setup.Quantity == quantities[q])
-        
-        if sum(setup_mask) == n_r:
-            well_map[t,q,r] = setup.Well[setup_mask].iloc[r]
-        else:
-            warnings.warn(f'{sum(setup_mask)} wells match target {targets[t]} and quantity {quantities[q]}')
-            well_map[t,q,r] = np.nan
-    
-    q_map, ct_instr, thresh_instr = [np.zeros([n_t,n_q,n_r,n_f]) for _ in range(3)]
-    Rn, dRn = [np.zeros([n_t,n_q,n_r,n_f,n_c]) for _ in range(2)]
-    
-    for (t,q,r,f) in np.ndindex(n_t,n_q,n_r,n_f):
-        quant = mypy.uniq(setup.Quantity[
-                (setup.Well == well_map[t,q,r]) & 
-                (setup.TargetName.str.contains(fluors[f]))
-                ])
-        tar = targets[t] + delin + fluors[f]
-        assert len(quant) <= 1, \
-            f'Quantity is not unique for target {tar}, fluor {fluors[f]}, quantity {quantities[q]}, rep {r}'
-        if len(quant) == 0:
-            warnings.warn(f'Quantity {quantities[q]} not found for target {tar}, fluor {fluors[f]}, rep {r}')
-            continue
-        q_map[t,q,r,f] = quant[0]
-        data_mask = (data.Well == well_map[t,q,r]) & \
-                (data.TargetName.str.contains(fluors[f]))
-        
-        if sum(data_mask) != n_c:
-            tar = targets[t] + delin + fluors[0]
-            print(tar)
-            print('{:}|{:}|{:}'.format(t,q,r))
-            print(quant)
-            continue
-        assert sum(data_mask) == n_c, \
-            f'{sum(data_mask)} rows match well {well_map[t,q,r]} and fluorophore {fluors[f]}'
-        
-        Rn[t,q,r,f,:] = data.Rn[data_mask]
-        dRn[t,q,r,f,:] = data.DeltaRn[data_mask]
-        
-        result = instr_results[(instr_results.Well == well_map[t,q,r]) &
-                               (instr_results.TargetName.str.contains(fluors[f]))]
-        ct_instr[t,q,r,f] = result.CT
-        thresh_instr[t,q,r,f] = result.CtThreshold
-        
-    return {'c'             : c,
-            'n_t'           : n_t,
-            'n_q'           : n_q,
-            'n_f'           : n_f,
-            'lg_q'          : np.log10(quantities),
-            'well_map'      : well_map,
-            'q_map'         : q_map,
-            'dRn'           : dRn,
-            'ct_instr'      : ct_instr,
-            'thresh_instr'  : thresh_instr}
-
-###############################################################################
 #%% Calculate CTs from thresholds
 
 def calcCTs(dRn, thresholds, n_t, n_q, n_r, n_c, interp_step = 0.01):
@@ -223,9 +80,7 @@ def calcCTs(dRn, thresholds, n_t, n_q, n_r, n_c, interp_step = 0.01):
 
 
 
-###############################################################################
-#%% Plot Rn and dRn, overlaying replicates
-
+#%% Plot each target in own axis
 
 def setupOverlay(targets, labels, plt_kwargs = {},
                  t_map = None, q_colors = None, show_legend = True,
@@ -292,55 +147,7 @@ def setupOverlay(targets, labels, plt_kwargs = {},
     
     return fig, axs
 
-        
-def plotGrid(targets, quantities, y, x = None, CTs = None, t_colors = None,
-             fig = None, axs = None):
-    n_t, n_q, n_r, n_c = np.shape(y)
-    if not x: x = np.arange(n_c)+1
 
-    if None in (fig,axs):
-        # Subplot grid for targets and quantities
-        fig, axs = plt.subplots(nrows=n_t, ncols=n_q,
-                               sharey=True, sharex=True,
-                               gridspec_kw={'hspace': 0., 'wspace': 0.})
-    
-    # Define plot styles for each target
-    if t_colors is None:
-        t_colors = {t:{'color':'C{:}'.format(i)} for i,t in enumerate(targets)}
-    
-    for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        axs[i,j].plot(x,y[i,j,k,:],**t_colors[targets[i]])
-        plt.setp(axs[i,j],**{
-                'xticklabels'   : [],
-                'yticklabels'   : []
-                })
-    
-    if CTs is not None: # Denote ct's with vertical dashed lines
-        for (i,j) in np.ndindex(n_t,n_q): axs[i,j].axvline(np.nanmean(CTs[i,j,:]), linestyle = ':', color = 'k')
-    
-    # Adjust y-tick spacing
-    yl = axs[0,0].get_ylim()
-    axs[0,0].set_yticks(np.linspace(yl[0],yl[1],5))
-    
-    # Add x and y labels for subplot grid
-    for i,t in enumerate(targets):
-        axs[i,0].set_ylabel(t, rotation=0, labelpad = 0, ha='right', va='center')
-    for j,q in enumerate(quantities): axs[n_t-1,j].set_xlabel(np.log10(q))
-    
-    fig.text(0.5, 0.02, 'log$_{10}$ Copies', ha='center', weight = 'bold')
-    fig.text(0.03, 0.5, 'Target', ha='center', va='center', rotation='vertical', weight = 'bold')
-    fig.tight_layout(rect=[0.03, 0.03, 1, 0.9])
-        
-    return {'fig' : fig, 'axs' : axs}
-    
-
-def setupGrid(n_t,n_q):
-    return plt.subplots(nrows=n_t, ncols=n_q,
-                        sharey=True, sharex=True,
-                        gridspec_kw={'hspace': 0., 'wspace': 0.})
-
-
-###############################################################################
 #%% Plot efficiencies from CT fits
 # Function for determining efficiency from CT fits with uncertainty
 def calc_E (ct_mat,quant_list,n_reps):
@@ -420,481 +227,153 @@ def plotEfit(targets, lg_q, CTs, t_colors = None, style = 'absolute'):
     return {'target_stats' : target_stats,
             'fig_CT_eff'   : fig_CT_eff,
             'ax_CT_eff'    : ax_CT_eff,}
-    
 
-###############################################################################
-#%% Model definitions and fitting functions
 
-# 4- and 5- parameter logistic models (4PLM, 5PLM)
-def logistic_4P(c,F0,Fmax,cflex,b):
-    return F0 + ( Fmax - F0 )/( 1 + (c/cflex)**b )
+#%% Equation Definitions
 
-def logistic_4P_inv(Ffrac,cflex,b):
-    return np.floor( cflex*( 1/Ffrac - 1 )**(1/b) ).astype(int)
+## Define the (differential) equations to be fit to the data
 
-def logistic_5P(c,F0,Fmax,cflex,b,g):
-    return F0 + ( Fmax - F0 )/( 1 + ( c/cflex )**b )**g
+# Convert the growth rate from base-e to base-2
+lg2_e = np.log2(np.exp(1))
 
-def logistic_5P_inv(Ffrac,cflex,b,g):
-    return np.floor( cflex*( (1/Ffrac)**(1/g) - 1 )**(1/b) ).astype(int)
 
-## Fit full-process kinetics PCR model (FPK-PCR) from Lievens et al. 2011 (DOI:10.1093/nar/gkr775)
-# Bilinear model for ln(ln(E)) from fluorescence
-def E_BLM(F,a1,a2,a3,eta,chi,Fc):
-    return chi + eta*np.log( np.exp( ( a1*(F-Fc)**2 + a2*(F-Fc) )/eta ) + np.exp( ( a3*(F-Fc) )/eta ) )
+# Logistic growth equation with growth rate r and carrying capacity K
+def growth(t, params):
+    pop0 = params['pop0'].value
+    r = params['r'].value
+    K = params['K'].value
+    return K / (1 + (K - pop0) / pop0 * np.exp(-r / lg2_e * t))
 
-def fitSigmoid(x,y): 
-    y = y - np.min(y) + np.min(np.diff(y)) # Zero data
-    
-    F0_guess = y[0]
-    Fmax_guess = y[-1]
-    cflex_guess = x[ np.argmax( y > np.mean([F0_guess,Fmax_guess]) ) ]
-    b_guess = -10
-    p_opt_4PLM, p_cov_4PLM = opt.curve_fit(logistic_4P, x, y, p0 = (F0_guess,Fmax_guess,cflex_guess,b_guess))
 
-    '''    
-    p_std_4PLM = np.sqrt(np.diag(p_cov_4PLM))
-    residuals_4PLM = y - logistic_4P(x, *p_opt_4PLM)
-    ss_res_4PLM = np.sum(residuals_4PLM**2)
-    ss_tot_4PLM = np.sum((y-np.mean(y))**2)
-    r2_4PLM = 1 - (ss_res_4PLM / ss_tot_4PLM)
-    ''' 
-   
-    # Truncate the data to improve the 5PLM fit
-    stop_plateau = logistic_4P_inv(0.99,*p_opt_4PLM[2:])
-    
-    try:
-        # Fit 5PLM
-        g_guess = 1
-        p_opt_5PLM, p_cov_5PLM = opt.curve_fit(logistic_5P, x[:stop_plateau], y[:stop_plateau],
-                                   p0 = (*p_opt_4PLM,g_guess))
-    except RuntimeError:
-        print('5PLM fit error')
-        start_ground = 4
-        start_decline = logistic_4P_inv(0.05,*p_opt_4PLM[2:])+1
-        stop_ground = start_decline-7
-        start_transition = logistic_4P_inv(0.85,*p_opt_4PLM[2:])-2
-        stop_transition = logistic_4P_inv(0.95,*p_opt_4PLM[2:])-2
-        
-        p_opt = [*p_opt_4PLM,0]
-        p_cov = p_cov_4PLM
-        is_4PLM = True
+# Logistic growth ODE
+def growth_deq(pop, t, params):
+    r = params['r'].value
+    K = params['K'].value
+    x = pop
+    return r / lg2_e * x * (1 - x / K)
+
+
+# Solve the logistic growth ODE
+def growth_deq_sol(t, pop0, params):
+    return odeint(growth_deq, pop0, t, args=(params,))
+
+
+# Error in the growth model
+def growth_residual(params, t, data):
+    pop0 = params['pop0'].value
+    model = growth_deq_sol(t, pop0, params)
+    return (model - data).ravel()  # *np.gradient(data.ravel())
+
+
+# Linear drift equation
+def drift(t, params):
+    intercept = params['intercept'].value
+    slope = params['slope'].value
+    return intercept + slope * t
+
+
+# A mixture model for the drift and growth equations (solutions)
+def mix_model(t, params):
+    return drift(t, params) * growth(t, params)
+
+
+# Error in the growth model
+def mix_residual(params, t, data):
+    model = np.reshape(mix_model(t, params), [-1, 1])
+    return (model - data).ravel()  # *np.gradient(data.ravel())
+
+
+# Logistic growth ODE where K (carrying capacity) is a linear function of time
+def mix_deq(vals, t, params):
+    pop, K = vals
+    r = params['r'].value
+    m = params['slope'].value
+
+    dx = r / lg2_e * pop * (1 - pop / K)
+    dK = m
+
+    return [dx, dK]
+
+
+# Solve the ODE with tight absolute tolerance
+def mix_deq_sol(t, vals0, params):
+    abserr = 1.0e-12
+    relerr = 1.0e-6
+    return odeint(mix_deq, vals0, t, args=(params,),
+                  atol=abserr, rtol=relerr)
+
+
+# Error in the growth/drift ODE model.
+# Assess only the full model, not the drift component alone (model[:,1])
+def mix_deq_res(params, t, data):
+    pop0 = params['pop0'].value
+    K0 = params['intercept'].value
+    model = mix_deq_sol(t, [pop0, K0], params)
+    return (model[:, 0] - data[:, 0]).ravel()
+
+#%% Fitting Strategy
+# Fit differential equations directly (True) or use the "empirical" mixture model (False).
+# The direct diffeq approach doesn't improve the fit greatly, and takes ~twice as long, but is more explainable.
+
+def driftgrowth(c, data, diffeq=True, row=None):
+    # Fit a simple logistic growth ODE model with no drift to provide estimates for the drift model
+    init_growth = lf.Parameters()
+    init_growth.add('r', value=1, min=0.1, max=2, vary=True)  # Could maybe be a wider range
+    # Offset which relates known initial copy number to estimated initial fluorescence intensity
+    # There appears to have been a mistake where BP200 and BP240 were not diluted properly, off
+    # by an order of magnitude. This would probably be better to address in the initial import, but...
+    # that might break things
+    pop0_offset = 11.5 if row.Tar not in ['BP200', 'BP240'] else 10.5
+    pop0_guess = row.Tar_Q - pop0_offset
+    init_growth.add('pop0', value=10 ** (pop0_guess), min=10 ** (pop0_guess - 1), max=10 ** (pop0_guess + 1), vary=True)
+    init_growth.add('K', value=float(data[-1]) * 0.8, min=1e-1, max=1.5)
+
+    init_result = lf.minimize(growth_residual, init_growth, args=(c, data), method='leastsq')
+    final = data + init_result.residual.reshape(data.shape)
+
+    # Define the "beginning" of the drift region as where the numerical derivative is less than 1% above its final value
+    '''
+    cutoff = 0.01
+    dy = data[1:-1]/data[0:-2]
+    dy /= max(dy)
+    start = np.argmax((dy>dy[-1]+cutoff)[::-1])
+    '''
+    if row is not None:
+        drift0 = len(c) - 5 if row.Tar_Q == 2 else len(c) - 10
     else:
-        # Extract reference points from 5PLM
-        #skip first 3 cycles for stability
-        start_ground = 4
-        #ground phase ends at ~5% maximum signal change
-        start_decline = logistic_5P_inv(0.05,*p_opt_5PLM[2:])+1
-        stop_ground = start_decline-7
-        #phase transition btw first and second declines occurs btw 85% and 95%
-        start_transition = logistic_5P_inv(0.85,*p_opt_5PLM[2:])
-        stop_transition = logistic_5P_inv(0.95,*p_opt_5PLM[2:])
-        
-        p_opt = p_opt_5PLM
-        p_cov = p_cov_5PLM
-        is_4PLM = False
-        
-        
-    ctrl_pts = {'start_ground'      : start_ground,
-                'stop_ground'       : stop_ground,
-                'start_decline'     : start_decline,
-                'start_transition'  : start_transition,
-                'stop_transition'   : stop_transition}
-    
-    return {'ctrl_pts'  : ctrl_pts,
-            'p_opt'     : p_opt,
-            'p_cov'     : p_cov,
-            'is_4PLM'   : is_4PLM}
-    
-def fitLMs(F, ln2E, ctrl_pts):
-    (start_ground, stop_ground, start_decline, start_transition, stop_transition) = ctrl_pts.values()
-    
+        drift0 = 45  # c[-start] if start<5 else 45
 
-    # Fit first decline phase to guess a1, a2, and chi
-    try:
-        a1,a2,chi = np.polyfit(F[start_decline:start_transition], ln2E[start_decline:start_transition], 2)
-    except:
-        return
-        
-    # Fit second decline phase to guess a3
-    dec2_y = F[start_transition:-1]
-    dec2_x = ln2E[start_transition:]
-    mask = ~np.isnan(dec2_x)
-    try:
-        a3_inv,interc_inv = np.polyfit(dec2_x[mask],dec2_y[mask],1)
-    except:
-        return
-    
-    a3 = 1/a3_inv
-    interc = -interc_inv*a3
-    
-    return {'Lin1_params'  : [a1,a2,chi],
-            'Lin2_params'  : [a3,interc]}
+    init_drift = np.polyfit(c[drift0:], data[drift0:], 1)[:, 0]
 
-def fitBLM(F, ln2E, ctrl_pts, Lin1_params, Lin2_params):
-    start_decline = ctrl_pts['start_decline']
-    
-    ln2E_ROI = ln2E[start_decline:]
-    mask = ~np.isnan(ln2E_ROI)
-    F_ROI = F[start_decline:-1][mask]
-    ln2E_ROI = ln2E_ROI[mask]
-    
-    a1,a2,chi = Lin1_params
-    a3,interc = Lin2_params
-        
-    # Graphically find intersection of two polynomials to guess Fc
-    p1 = np.poly1d([a1,a2,chi])
-    p2 = np.poly1d([a3,interc])
-    F_range = np.linspace(0,np.max(F),1e5)
-    Fc_ind = np.argmax(p2(F_range) <= p1(F_range))
-    if ~Fc_ind:
-        Fc = F[ctrl_pts['start_transition']]
+    # Use outputs from the preliminary growth fit as initial guesses for the mixture model
+    mixture = lf.Parameters()
+    # Should probably limit variation to a narrower relative range for both pop0 and r
+    mixture['r'] = cp.copy(init_result.params['r'])
+    mixture['pop0'] = cp.copy(init_result.params['pop0'])
+    # Allow the drift parameters to vary only slightly (20%) from their values found by the linear fit
+    # Otherwise the intercept and r in particular become far too correlated
+    slope = float(init_drift[0])
+    intercept = float(init_drift[1])
+    if np.abs(slope) < 1e-15:
+        mixture.add('slope', value=slope, min=-1e-10, max=1e-10)
     else:
-        Fc = F_range[Fc_ind]
-    
-    # Standard guess for eta
-    eta = -0.5
-    
-    guess_params = [a1,a2,a3,eta,chi,Fc]
-    
-    try:
-        p_opt_E_BLM, p_cov_E_BLM = opt.curve_fit(E_BLM, F_ROI, ln2E_ROI,
-                                                 p0 = guess_params)
-        
-    except RuntimeError: # Try again with modified guesses
-        guess_params = [a1,a2*10,a3*10,eta*10,chi,Fc]
-        try:
-            p_opt_E_BLM, p_cov_E_BLM = opt.curve_fit(E_BLM, F_ROI, ln2E_ROI,
-                                                     p0 = guess_params)
-            
-        except RuntimeError: # If it still doesn't work just use the guesses
-            print('BLM Fit Error')
-            return
-        
-    return p_opt_E_BLM
+        mixture.add('slope', value=slope, min=slope * 0.8, max=slope * 1.2)
+    mixture.add('intercept', value=intercept, min=intercept * 0.8, max=intercept * 1.2)
 
+    if diffeq:
+        mix_result = lf.minimize(mix_deq_res, mixture, args=(c, data), method='leastsq')
+        pop0 = mix_result.params['pop0'].value
+        K0 = mix_result.params['intercept'].value
+        model = mix_deq_sol(c, [pop0, K0], mix_result.params)
+        final = model[:, 0]
+    else:
+        mixture.add('K', value=1, vary=False)
+        mix_result = lf.minimize(mix_residual, mixture, args=(c, data), method='leastsq')
+        final = data[:, 0] + mix_result.residual.reshape(data[:, 0].shape)  # /np.gradient(data.ravel())
+    return {'params': mix_result,
+            'fit': final}
 
-###############################################################################
-#%% Fit each curve
-def fit_all_curves(F):
-    n_t, n_q, n_r, n_c = F.shape
-    c = np.arange(n_c)+1
-    # For storing fit parameters
-    sig_params = np.zeros([n_t,n_q,n_r,5])
-    Lin1_params = np.zeros([n_t,n_q,n_r,3])
-    Lin2_params = np.zeros([n_t,n_q,n_r,2])
-    BLM_params = np.zeros([n_t,n_q,n_r,6])
-    ctrl_pts = np.zeros([n_t,n_q,n_r,5],dtype='int')
-    
-    E0 = np.zeros([n_t,n_q,n_r])
-    skip_Fit, is_4PLM, badLinFit, badBLMFit = [np.full([n_t,n_q,n_r], False, dtype = bool) for _ in range(4)]
-    
-    #skip_Fit[5,3:] = True
-    
-    E = F[...,1:]/F[...,:-1]
-    ln2E = np.log( np.log(E) )
-    
-    for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        this_F = F[i,j,k]
-        if skip_Fit[i,j,k]: continue
-        print('{:}|{:}|{:}'.format(i,j,k))
-        
-        sig_fit = fitSigmoid(c,this_F)
-        pts, sig_params[i,j,k], _, is_4PLM[i,j,k] = sig_fit.values()
-        ctrl_pts[i,j,k] = list(pts.values())
-        
-        LM_fit = fitLMs(this_F, ln2E[i,j,k], pts)
-        if LM_fit is None:
-            badLinFit[i,j,k] = True
-            badBLMFit[i,j,k] = True
-            continue
-        
-        Lin1_params[i,j,k], Lin2_params[i,j,k] = LM_fit.values() 
-        
-        BLM_fit = fitBLM(this_F, ln2E[i,j,k], pts, Lin1_params[i,j,k], Lin2_params[i,j,k])
-        if BLM_fit is None:
-            badBLMFit[i,j,k] = True
-            continue
-        
-        BLM_params[i,j,k] = BLM_fit
-        E0[i,j,k] = np.exp( np.exp( E_BLM(0,*BLM_params[i,j,k]) ) )
-               
-    
-    print('\n{:} bad fits'.format(np.sum(badBLMFit)))
-    bad_Fit = skip_Fit | is_4PLM | badLinFit | badBLMFit
-    
-    return [sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts, E, ln2E, E0,
-            skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit]
-  
-    
-###############################################################################
-#%% Plot each curve 
-def plot_all_curves(F, targets, quantities,
-                    sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts,
-                    E, ln2E, E0, skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit,
-                    q_colors = None, t_map = None):
-    ## Set up plots for transformed efficiency vs fluorescence with different layers of information
-    
-    n_t, n_q, n_r, n_c = F.shape
-    c = np.arange(n_c)+1
-    
-    if q_colors is None:
-        cmap_q = sns.color_palette('cubehelix',n_q+1)
-        q_colors = {j:{'color' : cmap_q[j]} for j in range(n_q)}
-
-    
-    dot_style = {'marker'   : '.',
-                 'linestyle': 'None',
-                 'alpha'    : 0.25}
-    
-    fit_style = {'linestyle' :'-',
-                 'alpha'     : 1}
-    
-    extrap_style = {'linestyle' : '--'}
-        
-    fig_ln2EvF_dots, axs_ln2EvF_dots = setupOverlay(targets, quantities, t_map = t_map)
-    fig_ln2EvF_LMs, axs_ln2EvF_LMs = setupOverlay(targets, quantities, t_map = t_map)
-    fig_ln2EvF_BLM, axs_ln2EvF_BLM = setupOverlay(targets, quantities, t_map = t_map)
-    ln2EvF_axs = [axs_ln2EvF_dots, axs_ln2EvF_LMs, axs_ln2EvF_BLM]
-    ln2EvF_figs = [fig_ln2EvF_dots, fig_ln2EvF_LMs, fig_ln2EvF_BLM]
-    fig_EvC_dots, axs_EvC_dots = setupOverlay(targets, quantities, t_map = t_map)
-    fig_EvC_LMs, axs_EvC_LMs = setupOverlay(targets, quantities, t_map = t_map)
-    fig_EvC_BLM, axs_EvC_BLM = setupOverlay(targets, quantities, t_map = t_map)
-    EvC_axs = [axs_EvC_dots, axs_EvC_LMs, axs_EvC_BLM]
-    EvC_figs = [fig_EvC_dots, fig_EvC_LMs, fig_EvC_BLM]
-    
-    for t in targets:
-        for axs in EvC_axs:
-            plt.setp(axs[t],**{
-                    'title': t,
-                    'ylim': [0.5,3],
-                    'yticks': np.arange(0.5,3.1,0.5),
-                    'yticklabels': ['','1','','2','','3'],
-                    'xlabel': 'Cycle',
-                    'ylabel': 'Efficiency'})
-        
-        for axs in ln2EvF_axs:
-            plt.setp(axs[t],**{
-                    'title': t,
-                    'ylim': [-8,1],
-                    'xlabel': 'Fluorescence',
-                    'ylabel': 'ln$^2$ Efficiency'})
-        
-    #for i in range(1,len(targets)):
-    #    # Share x axes between all targets
-    #    for axs in EvC_axs: axs[targets[0]].get_shared_x_axes().join(axs[targets[0]],axs[targets[i]])
-    #    # Share x axes between all HEX targets
-    #    for axs in ln2EvF_axs: axs[targets[1]].get_shared_x_axes().join(axs[targets[1]],axs[targets[i]])
-    
-    ## Plot each curve
-    for (i,j,k) in np.ndindex(n_t,n_q,n_r):
-        if skip_Fit[i,j,k]: continue
-        t = targets[i]
-        this_F = F[i,j,k]
-        this_ln2E = ln2E[i,j,k]
-        this_E = E[i,j,k]
-    
-        start_ground, stop_ground, start_decline, start_transition, stop_transition = ctrl_pts[i,j,k]
-        
-        # Plot individual data points
-        for axs in ln2EvF_axs:
-            axs[t].plot(this_F[:-1], this_ln2E, **q_colors[j], **dot_style)
-        for ax in EvC_axs:
-            ax[t].plot(c[stop_ground:-1], this_E[stop_ground:], **q_colors[j], **dot_style)
-    
-        # Overlay the linear model fits
-        if badLinFit[i,j,k]: continue
-        Lin1_F = this_F[stop_ground:start_transition]
-        Lin1_c = c[stop_ground:start_transition]
-        Lin2_F = this_F[start_transition+2:]
-        Lin2_c = c[start_transition+2:]
-        p1 = np.poly1d(Lin1_params[i,j,k])
-        p2 = np.poly1d(Lin2_params[i,j,k])
-        
-        axs_ln2EvF_LMs[t].plot(Lin1_F,p1(Lin1_F), **q_colors[j], **fit_style)
-        axs_ln2EvF_LMs[t].plot(Lin2_F,p2(Lin2_F), **q_colors[j], **fit_style)
-        
-        axs_EvC_LMs[t].plot(Lin1_c,np.exp( np.exp( p1(Lin1_F) ) ), **q_colors[j], **fit_style)
-        axs_EvC_LMs[t].plot(Lin2_c,np.exp( np.exp( p2(Lin2_F) ) ), **q_colors[j], **fit_style)
-        #Extrapolate the first fit back to the beginning
-        extrap_F = this_F[:stop_ground]
-        extrap_c = c[:stop_ground]
-        axs_EvC_LMs[t].plot(extrap_c,np.exp( np.exp( p1(extrap_F) ) ), **q_colors[j], **extrap_style)
-    
-        #Overlay the bilinear model fits
-        if badBLMFit[i,j,k]: continue
-        BLM_F = this_F[start_decline:-1]
-        x = np.linspace(this_F[start_decline],np.max(this_F),100)
-        BLM_c = c[start_decline:-1]
-        axs_ln2EvF_BLM[t].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
-        axs_EvC_BLM[t].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)
-        #Extrapolate back to the beginning
-        extrap_F = this_F[:start_decline]
-        extrap_c = c[:start_decline]
-        axs_EvC_BLM[t].plot(extrap_c,np.exp( np.exp( E_BLM(extrap_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **extrap_style)
-    
-#    for f in EvC_figs: mypy.bigntight(f)
-#    for f in ln2EvF_figs: mypy.bigntight(f)
-    
-    return EvC_figs, EvC_axs, ln2EvF_figs, ln2EvF_axs
-
-
-###############################################################################
-#%% Make detailed side-by-side comparison plots for one target        
-
-def focusTarget(focus_t, F, targets, quantities, 
-                    sig_params, Lin1_params, Lin2_params, BLM_params, ctrl_pts,
-                    E, ln2E, E0, skip_Fit, is_4PLM, badLinFit, badBLMFit, bad_Fit,
-                    q_colors = None, show_fit = ('BLM','LM','none')):
-    
-    blm = 'BLM' in show_fit
-    lm = 'LM' in show_fit
-    nf = 'none' in show_fit
-    
-    i = targets.index(focus_t)
-    n_t, n_q, n_r, n_c = F.shape
-    c = np.arange(n_c)+1
-    
-    if q_colors is None:
-        cmap_q = sns.color_palette('cubehelix',n_q+1)
-        q_colors = {j:{'color' : cmap_q[j]} for j in range(n_q)}
-    
-    # Plot with smaller x- and y-tick labels and axis labels
-    focus_axs = list()
-    focus_figs = list()
-    with plt.rc_context({'axes.labelsize'  : 'small',
-                         'axes.labelweight': 'normal',
-                         'xtick.labelsize' : 'small',
-                         'ytick.labelsize' : 'small'}):
-        
-        if blm:
-            fig_focus_BLM, axs_focus_BLM = plt.subplots(1,3, figsize=[26,9])
-            focus_axs.append(axs_focus_BLM)
-            focus_figs.append(fig_focus_BLM)
-        if lm:
-            fig_focus_LMs, axs_focus_LMs = plt.subplots(1,3, figsize=[26,9])
-            focus_axs.append(axs_focus_LMs)
-            focus_figs.append(fig_focus_LMs)
-        if nf:
-            fig_focus_dots, axs_focus_dots = plt.subplots(1,3, figsize=[26,9])
-            focus_axs.append(axs_focus_dots)
-            focus_figs.append(fig_focus_dots)
-    if blm: fig_focus_BLM.suptitle('{:s} focus\nBLM Fits'.format(focus_t))
-    if lm: fig_focus_LMs.suptitle('{:s} focus\nLM Fits'.format(focus_t))
-    if nf: fig_focus_dots.suptitle('{:s} focus\nPoints Only'.format(focus_t))   
-        
-
-    dot_style = {'marker'   : '.',
-                 'linestyle': 'None',
-                 'alpha'    : 0.25}
-    
-    fit_style = {'linestyle' :'-',
-                 'alpha'     : 1}
-    
-    extrap_style = {'linestyle' : '--'}
-    
-    for (j,k) in np.ndindex(n_q,n_r):
-        if skip_Fit[i,j,k]: continue
-        this_F = F[i,j,k]
-        this_ln2E = ln2E[i,j,k]
-        this_E = E[i,j,k]
-    
-        start_ground, stop_ground, start_decline, start_transition, stop_transition = ctrl_pts[i,j,k]
-        
-        # Plot individual data points
-        for axs in focus_axs:
-            axs[0].plot(c,this_F,**q_colors[j], **dot_style)
-            axs[1].plot(this_F[:-1], this_ln2E, **q_colors[j], **dot_style)
-            axs[2].plot(c[stop_ground:-1], this_E[stop_ground:], **q_colors[j], **dot_style)
-            
-        # Overlay the sigmoidal fits
-        if blm:
-            if is_4PLM[i,j,k]:
-                p = axs_focus_BLM[0].plot(c,logistic_4P(c,*sig_params[i,j,k,:-1]), **q_colors[j], **fit_style)
-            else:
-                p = axs_focus_BLM[0].plot(c,logistic_5P(c,*sig_params[i,j,k,:]), **q_colors[j], **fit_style)        
-            if k == 1: plt.setp(p,'label','{:.0E}'.format(quantities[j]))
-            
-        if lm:
-            if is_4PLM[i,j,k]:
-                p = axs_focus_LMs[0].plot(c,logistic_4P(c,*sig_params[i,j,k,:-1]), **q_colors[j], **fit_style)
-            else:
-                p = axs_focus_LMs[0].plot(c,logistic_5P(c,*sig_params[i,j,k,:]), **q_colors[j], **fit_style)        
-            if k == 1: plt.setp(p,'label','{:.0E}'.format(quantities[j]))
-            
-    
-        # Overlay the linear model fits
-        if badLinFit[i,j,k]: continue
-        Lin1_F = this_F[stop_ground:start_transition]
-        Lin1_c = c[stop_ground:start_transition]
-        Lin2_F = this_F[start_transition+2:]
-        Lin2_c = c[start_transition+2:]
-        p1 = np.poly1d(Lin1_params[i,j,k])
-        p2 = np.poly1d(Lin2_params[i,j,k])
-        
-        if lm:
-            axs_focus_LMs[1].plot(Lin1_F,p1(Lin1_F), **q_colors[j], **fit_style)
-            axs_focus_LMs[1].plot(Lin2_F,p2(Lin2_F), **q_colors[j], **fit_style)
-            
-            axs_focus_LMs[2].plot(Lin1_c,np.exp( np.exp( p1(Lin1_F) ) ), **q_colors[j], **fit_style)
-            axs_focus_LMs[2].plot(Lin2_c,np.exp( np.exp( p2(Lin2_F) ) ), **q_colors[j], **fit_style)
-            #Extrapolate the first fit back to the beginning
-            extrap_F = this_F[:stop_ground]
-            extrap_c = c[:stop_ground]
-            axs_focus_LMs[2].plot(extrap_c,np.exp( np.exp( p1(extrap_F) ) ), **q_colors[j], **extrap_style)
-        
-        if blm:
-            #Overlay the bilinear model fits
-            if badBLMFit[i,j,k]: continue
-            BLM_F = this_F[start_decline:-1]
-            x = np.linspace(this_F[start_decline],np.max(this_F),100)
-            BLM_c = c[start_decline:-1]
-            axs_focus_BLM[1].plot(x,E_BLM(x,*BLM_params[i,j,k]), **q_colors[j], **fit_style)
-            axs_focus_BLM[2].plot(BLM_c,np.exp( np.exp( E_BLM(BLM_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **fit_style)
-            #Extrapolate back to the beginning
-            extrap_F = this_F[:start_decline]
-            extrap_c = c[:start_decline]
-            axs_focus_BLM[2].plot(extrap_c,np.exp( np.exp( E_BLM(extrap_F, *BLM_params[i,j,k]) ) ), **q_colors[j], **extrap_style)
-    
-    if lm: axs_focus_LMs[0].legend(title = 'Copies')
-    if blm: axs_focus_BLM[0].legend(title = 'Copies')
-    
-    for ax in focus_axs:
-        plt.setp(ax[0],**{
-                'xlabel': 'Cycle',
-                'ylabel': 'Fluorescence',
-                'title' : 'Signal over time'})
-        plt.setp(ax[1],**{
-                'xlabel': 'Fluorescence',
-                'ylabel': 'ln$^2$ Efficiency',
-                'title' : 'Transformed Efficiency'})
-        plt.setp(ax[2],**{
-                'ylim'  : [0.89, 2.5],
-                'xlim'  : ax[0].get_xlim(),
-                'xlabel': 'Cycle',
-                'ylabel': 'Efficiency',
-                'title' : 'Efficiency over time'})
-    
-    for fig in focus_figs:
-        plt.pause(1e-1)
-        fig.tight_layout(rect=[0, 0, 1, 0.9])
-    return focus_figs, focus_axs
-
-
- 
-###############################################################################  
-#%% Plot parameters by target and quantity
-
-def DF_params(params, F, targets, quantities):
-    
-    n_t,n_q,n_r,_ = F.shape
-
-    base = {'Target'    : [targets[i] for (i,_,_) in np.ndindex(n_t,n_q,n_r)],
-            'TargetN'   : [i for (i,_,_) in np.ndindex(n_t,n_q,n_r)],
-            'Quantity'  : [np.log10(quantities[j]) for (_,j,_) in np.ndindex(n_t,n_q,n_r)],
-            'QuantityN' : [j for (_,j,_) in np.ndindex(n_t,n_q,n_r)]}
-    
-    return pd.DataFrame({**base,**params})
+#%% Plot Fit parameters by target and quantity
 
 def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity', order = None):
     
@@ -961,11 +440,3 @@ def plotParams(FitParams,thresholds,x = 'Target', hue = 'Quantity', order = None
         
     return fig, axs
 
-
-    
-    
-    
-    
-    
-    
-    
