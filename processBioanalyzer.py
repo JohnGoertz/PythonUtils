@@ -65,7 +65,9 @@ def importPeaks(data_pth, prefix, suffix=None, ext = '.csv', header = 13, skip_i
     peaks = []
     for i,(n,name) in enumerate(zip(n_peaks,sample_names)):
         lane = results.iloc[skip:skip+n+2].rename(columns={c:col for c,col in enumerate(columns)})
-        lane.replace(to_replace='1,500',value='1500',inplace=True)
+        for col in num_columns:
+            lane[col] = lane[col].str.replace(',', '')
+        lane.replace(to_replace=',',value='',inplace=True)
         lane.insert(0,'Sample',name)
         for marker in markers:
             lane.insert(1,marker,lane['Observations']==marker)
@@ -148,17 +150,20 @@ def calibrate(ladder_peaks, kit='DNA1000'):
     return bp_to_s, s_to_bp
 
 
-def getFeature(samples, peaks, peak_list, feature, traces=None, tol=10, kit='DNA1000'):
+def getFeature(samples, peaks, peak_list, feature, label=None, traces=None, tol=10, kit='DNA1000'):
     vals = np.zeros([len(samples),len(peak_list)])
-    ref_q = np.zeros(len(samples))
+    labels = np.zeros(len(samples))
 
     if traces is not None:
         ladder_peaks = getLadderPeaks(traces, kit)
         bp_to_s, _ = calibrate(ladder_peaks, kit)
     
     for i,row in samples.reset_index().iterrows():
-        
-        ref_q[i] = row['Tar_Q']
+
+        if label is not None:
+            labels[i] = row[label]
+        else:
+            labels[i] = i
 
         these_peaks = peaks[peaks['Sample']==row['Sample']]
         if traces is not None:
@@ -168,7 +173,7 @@ def getFeature(samples, peaks, peak_list, feature, traces=None, tol=10, kit='DNA
             bkg = trace.Value[closest(trace.Time,bp_to_s(pk))] if traces is not None else 0
             vals[i,j] = these_peaks.loc[closest_peak,feature] if np.abs(these_peaks.loc[closest_peak,'Size [bp]']-pk)<tol else bkg
         
-    return ref_q,vals
+    return labels,vals
 
 
 def closest(lst,val,check_all=True):
@@ -188,7 +193,7 @@ def closest(lst,val,check_all=True):
 ###############################################################################
 
 def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_peaks=[], bp_min = -np.inf, bp_max = np.inf,
-               skip_ladder=True, stagger_labels=False, kit='DNA1000'):
+               skip_ladder=True, stagger_labels=False, kit='DNA1000', warnings=True):
     
     t = traces.iloc[0].Time
     
@@ -198,17 +203,13 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
     bp_to_s, _ = calibrate(ladder_peaks, kit)
     
     if bp_min>=kit_pks(kit)[0]:
-        t_rng[0] = bp_to_s(bp_min)
+        t_rng[0] = bp_to_s(bp_min, validate=warnings)
     if bp_max<=kit_pks(kit)[-1]:
-        t_rng[1] = bp_to_s(bp_max)
+        t_rng[1] = bp_to_s(bp_max, validate=warnings)
         
     
     if ax is None: _,ax = plt.subplots()
     ax.set_xlim(t_rng)
-    
-    # coordinate transform for annotations
-    xtrans = plt.gca().get_xaxis_transform() # x in data units, y in axes fraction
-    ytrans = plt.gca().get_yaxis_transform() # y in data units, x in axes fraction
     
     for i,trace in traces.iterrows():
         
@@ -218,15 +219,23 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
         these_peaks = (peaks['Sample'] == trace['Sample'])
         UM = these_peaks & peaks['Upper Marker']
         LM = these_peaks & peaks['Lower Marker']
-        norm = np.mean([peaks[M]['Peak Height'].values[0] for M in [UM,LM]])
+        traces.at[i,'Norm'] = np.mean([peaks[M]['Peak Height'].values[0] for M in [UM,LM]])
 
-        plt.plot(trace.Time,trace.Value/norm+i,color=trace.Color)
-        labely = trace.Value[closest(t,t_rng[1])]/norm+i+0.1
-        plt.annotate(trace.Sample,
+    these_traces = traces[traces.Norm.notna()]
+    renorm = np.max([trace.Value/trace.Norm for _,trace in these_traces.iterrows()])
+
+    # coordinate transform for annotations
+    xtrans = ax.get_xaxis_transform() # x in data units, y in axes fraction
+    ytrans = ax.get_yaxis_transform() # y in data units, x in axes fraction
+    for i, trace in these_traces.iterrows():
+        y = trace.Value/trace.Norm/renorm
+        ax.plot(trace.Time,y+i,color=trace.Color)
+        labely = y[closest(t,t_rng[1])]+i+0.1
+        ax.annotate(trace.Sample,
                      xy = (0.99, labely), xycoords=ytrans,
                      horizontalalignment='right', fontsize=18)    
             
-    plt.setp(plt.gca(),
+    plt.setp(ax,
              xlim = t_rng,
              yticks = [],
              xticks = []
@@ -240,23 +249,28 @@ def plotTraces(traces, peaks, skip_traces=[], ax=None, label_peaks=None, skip_pe
         if (bp<bp_min)|(bp>bp_max): continue
             
         pk = peaks[peaks['Size [bp]']==bp]
-        t = pk['Aligned Migration Time [s]'].mean()
-        plt.axvline(t, color=gray, linestyle='--', zorder=-1)
+        if pk.empty:
+            t = bp_to_s(bp)
+        else:
+            t = pk['Aligned Migration Time [s]'].mean()
+        ax.axvline(t, color=gray, linestyle='--', zorder=-1)
         labely = (i % 2 -1)/20-0.025 if stagger_labels else -0.025
         
-        plt.annotate(bp, xy=(t,labely), 
+        ax.annotate(bp, xy=(t,labely),
                      xycoords=xtrans, ha="center", va="top", fontsize=18)
-        if all(pk['Upper Marker']):
-            plt.annotate('UM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=18)
-        if all(pk['Lower Marker']):
-            plt.annotate('LM', xy=(t,labely-1/20), 
-                     xycoords=xtrans, ha="center", va="top", fontsize=18)
+
+        if not pk.empty:
+            if all(pk['Upper Marker']):
+                ax.annotate('UM', xy=(t,labely-1/20),
+                         xycoords=xtrans, ha="center", va="top", fontsize=18)
+            if all(pk['Lower Marker']):
+                ax.annotate('LM', xy=(t,labely-1/20),
+                         xycoords=xtrans, ha="center", va="top", fontsize=18)
         
-    plt.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
+    ax.annotate('bp', xy=(0.99,-0.025-stagger_labels/20/2),
                  xycoords='axes fraction', ha="right", va="top", fontsize=18)
         
-    return plt.gca()
+    return ax
 
 
 def GelLikeImage(traces, peaks, skip_traces=[], label_peaks=[], skip_peaks=[],
