@@ -1,7 +1,6 @@
 import numpy as np
 import pandas as pd
 import seaborn as sns
-import matplotlib as mpl
 import matplotlib.pyplot as plt
 import datetime #For timestamping files
 import pathlib as pl
@@ -11,27 +10,6 @@ from tqdm import tqdm
 import scipy.stats as stats
 import scipy.optimize as opt
 import numpy.random as rnd
-
-def plotSettings(env = 'spyder'):
-    if env.lower() == 'spyder':
-        plt.style.use('seaborn-poster')
-    elif env.lower() in ('jupyter','notebook'):
-        plt.style.use('seaborn-notebook')
-    
-    mpl.rcParams['font.family'] = 'sans-serif'
-    mpl.rcParams['font.sans-serif'] = 'Futura Bk BT'
-    mpl.rcParams['font.size'] = '20'
-    mpl.rcParams['axes.linewidth'] = 2
-    mpl.rcParams['patch.linewidth'] = 2
-    mpl.rcParams['figure.titlesize'] = 'large'
-    mpl.rcParams['figure.titleweight'] = 'bold'
-    mpl.rcParams['axes.labelsize'] = 'medium'
-    mpl.rcParams['axes.labelweight'] = 'bold'
-    mpl.rcParams['axes.titlesize'] = 'large'
-    mpl.rcParams['axes.titleweight'] = 'bold'
-    mpl.rcParams['xtick.labelsize'] = 'medium'
-    mpl.rcParams['ytick.labelsize'] = 'medium'
-    return
 
 
 #For datestamping files
