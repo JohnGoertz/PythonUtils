@@ -12,29 +12,6 @@ import gc
 import warnings
 
 
-class Argument():
-    def __init__(self, name):
-        self.name = name
-        self.sym = se.Symbol(name)
-
-    def __str__(self):
-        return self.name
-
-    def __repr__(self):
-        return self.__str__()
-
-class Parameter(Argument):
-    def __init__(self, name, value=1.0):
-        self.value = value
-        super(Parameter, self).__init__(name)
-
-class Variable(Argument):
-    def __init__(self, name, var_list, init=1.0):
-        self.y = jc.y(len(var_list))
-        self.init = init
-        super(Variable, self).__init__(name)
-        var_list.append(self)
-
 def copies2molar(copies):
     #Calculates concentration in a 10 μL volume
     return copies / 6.022e23 / (10*10**-6)
@@ -74,21 +51,146 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
 
 def grey(): return [132/256,151/256,176/256]
 
+
+class Primer:
+    """
+    Primers have a name and a concentration
+    
+    The class allows concentration to be specified in any units among 'copies',
+    'nM', and 'M'. All non-specified units are converted and updated appropriately
+    """
+    def __init__(self, name, copies=None, nM=None, M=None):
+        assert [copies,nM,M].count(None) == 2, 'Exactly one of copies, nM, or M must be supplied'
+        self.name = name
+        if copies is not None:
+            self.copies = copies
+        if nM is not None:
+            self.nM = nM
+        if M is not None:
+            self.M = M
+
+    def __str__(self):
+        return self.name
+
+    def __repr__(self):
+        return self.__str__()
+    
+    # When any of copies, nM, or M are set, convert to the appropriate units and set the others as well
+    
+    @property
+    def copies(self):
+        return self._copies
+    
+    @copies.setter
+    def copies(self, copies):
+        assert copies>0
+        self._copies = copies
+        self._nM = copies2molar(copies)*10**-9
+        self._M = copies2molar(copies)
+    
+    @property
+    def nM(self):
+        return self._nM
+    
+    @nM.setter
+    def nM(self, nM):
+        assert nM>0
+        self._nM = nM
+        self._M = nM * 10**-9
+        self._copies = molar2copies(nM * 10**-9)
+    
+    @property
+    def M(self):
+        return self._M
+    
+    @M.setter
+    def M(self, M):
+        assert M>0
+        self._M = M
+        self._nM = M * 10**9
+        self._copies = molar2copies(M)
+        
+        
+class Strand(Primer):
+    """
+    Strands have an associated rate, but otherwise behave just like Primers
+    """
+    def __init__(self, name, rate, copies=None, nM=None, M=None):
+        self.rate = rate  
+        super(Strand, self).__init__(name, copies, nM, M)      
+
+class Oligo(Strand):
+    """
+    Oligos consist of two Strands, '+' and '-'.
+    
+    Updating a property of an Oligo updates the corresponding property in both
+    of its Strands. The reverse is not true. Directly setting Strand properties 
+    might break things, procede with caution.
+    """
+    def __init__(self, name, rate, copies=None, nM=None, M=None):
+        self.strands = []
+        for strand in ['-','+']:
+            self.strands.append(Strand(name+strand, rate, copies, nM, M))
+        super(Oligo, self).__init__(name, rate, copies, nM, M)
+    
+    # When setting a property of the oligo, set that same property for its strands as well
+    
+    @property
+    def rate(self):
+        return self._rate
+    
+    @rate.setter
+    def rate(self, rate):
+        self._rate = rate
+        for strand in self.strands:
+            strand.rate = rate
+    
+    @property
+    def copies(self):
+        return Strand.copies.fget(self)
+    
+    @copies.setter
+    def copies(self, copies):
+        Strand.copies.fset(self, copies)
+        for strand in self.strands:
+            strand.copies = copies
+    
+    @property
+    def nM(self):
+        return Strand.nM.fget(self)
+    
+    @nM.setter
+    def nM(self, nM):
+        Strand.nM.fset(self, nM)
+        for strand in self.strands:
+            strand.nM = nM
+    
+    @property
+    def M(self):
+        return Strand.M.fget(self)
+    
+    @M.setter
+    def M(self, M):
+        Strand.M.fset(self, M)
+        for strand in self.strands:
+            strand.M = M
+            
+
 class PCR:
 
     defaults = {
-        'norm' : molar2copies(100*10**-9),
+        'oligo_copies' : 10**5,
+        'oligo_rate' : 0.9,
+        'primer_nM' : 100,
+        'norm_nM' : 100,
         'cycles' : 60,
-        'solution' : None,
-        'oligo_init' : 10**5,
-        'rate' : 0.9,
-        'primer_init' : molar2copies(100*10**-9),
+        'sol' : None,
         'integrator' : 'RK45'
     }
 
-    def __init__(self, connections, labels, oligo_names=None, label_names=None):
+    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None):
         """
-        Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
+        Constructs a Monod simulation of a PCR reaction system.
 
         Args:
             connections (array): A connectivity matrix of shape (n,p) 
@@ -99,110 +201,144 @@ class PCR:
                 "targeting" means "complementary" to, so a primer that targets the positive strand gets
                 extended to generate the negative strand.
 
-            labels (list): Specify which strands are labeled.
+            labels (list): A list of arrays that specify which strands are labeled
                 A list of vectors, each of length (2*n), indicating which strands are targeted with the given 
                 probe color. Strands alternate -/+ in the same order as in `connections`
 
         """
 
+        assert all(np.sum(connections==-1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
+        assert all(np.sum(connections==+1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
+        assert all(np.sum(connections!=0, axis=1) == 2), 'All rows of connections must have exactly two non-zero values'
+        
         self.connections = connections
         self.n_oligos, self.n_primers = connections.shape
-        self.oligos = [chr(ord('a')+i) for i in range(self.n_oligos)] if oligo_names is None else oligo_names
-        self.labels = labels
-        self.label_names = label_names
-        self.primers = [f'p{i}' for i in range(self.n_primers)]
-        self.checkInputs()
+        self.n_strands = self.n_oligos*2
+        
+        if labels is None:
+            self.labels = [[]]
+            self.labels[0].extend([1,0] for _ in range(self.n_oligos))
+        else:
+            assert all(len(label)==self.n_strands for label in labels)
+            self.labels = labels
+        self.n_labels = len(self.labels)
+        
+        if oligo_names is None:
+            oligo_names = [chr(ord('a')+i) for i in range(self.n_oligos)]
+        else:
+            assert len(oligo_names)==self.n_oligos
+            
+        if label_names is None:
+            label_names = [f'L{i}' for i in range(self.n_primers)]
+        else:
+            assert len(label_names)==self.n_labels
+            self.label_names = label_names
+            
+        if primer_names is None:
+            primer_names = [f'p{i}' for i in range(self.n_primers)]
+        else:
+            assert len(primer_names)==self.n_primers
+        
+        self.oligos = [Oligo(name, self.defaults['oligo_rate'], self.defaults['oligo_copies']) for name in oligo_names]
+        self.strands = []
+        for oligo in self.oligos:
+            self.strands.extend(oligo.strands)
+        self.primers = [Primer(name, nM=self.defaults['primer_nM']) for name in primer_names]
         self.setDefaults()
         self.buildEquations()
         #self.buildLabels()
         #self.compileODE(verbose=True)
 
     ################################################################################
-    ## Verification Functions
+    ## Getters and Setters
     ################################################################################
     
-    def checkInputs(self):
-        assert len(self.oligos) == self.n_oligos
-        assert all(np.sum(self.connections, axis=1) == 0)
-        assert all(np.sum(self.connections!=0, axis=1) == 2)
-        assert len(self.labels)<=2, 'No more than two labels may be used (for now)'
-        for label in self.labels:
-            assert len(label) == 2*self.n_oligos
-        if self.oligos is not None:
-            assert len(self.oligos) == self.n_oligos
-        if self.label_names is not None:
-            assert len(self.labels) == len(self.label_names)
+    @property
+    def initial_oligo_copies(self):
+        return [oligo.copies for oligo in self.oligos]
+    
+    @initial_oligo_copies.setter
+    def initial_oligo_copies(self,copies_list):
+        for oligo,copies in zip(self.oligos,copies_list):
+            oligo.copies = copies
 
-    ################################################################################
-    ## Convenience Functions
-    ################################################################################
-
-    def list(self,str_attr):
-        return [str(item) for item in getattr(self,str_attr)]
-
-    def from_list(self,attribute,item):
-        return getattr(self,attribute)[self.list(attribute).index(item)]
-
-    ################################################################################
-    ## Setters and Getters
-    ################################################################################
-
-    # def set_rate(self, oligo, rate):
-    #     oligo = str(oligo)
-    #     rate_name = 'r_'+oligo
-    #     assert rate>0, 'Rate must be greater than 0'
-    #     assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
-    #     self.from_list('rates',rate_name).value = rate
-
-    # def get_rate(self, oligo):
-    #     oligo = str(oligo)
-    #     rate_name = 'r_'+oligo
-    #     assert rate_name in self.list('rates'), f'Oligo {oligo} not found'
-    #     return self.from_list('rates',rate_name).value
-
-    # def set_primer_init(self, primer, nM):
-    #     primer = str(primer)
-    #     assert primer in self.list('primers'), f'Primer {primer} not found'
-    #     # Set the init in copies
-    #     self.from_list('primers',primer).init = molar2copies(nM*10**-9)
-
-    # def get_primer_init(self, primer, copies=False):
-    #     primer = str(primer)
-    #     assert primer in self.list('primers'), f'Primer {primer} not found'
-    #     if copies:
-    #         # Init should already be in copies
-    #         return self.from_list('primers',primer).init
-    #     else:
-    #         return copies2molar(self.from_list('primers',primer).init)*10**9
-
-    # def set_oligo_init(self, oligo, copies):
-    #     oligo = str(oligo)
-    #     assert oligo in self.list('oligos'), f'Oligo {oligo} not found'
-    #     self.from_list('strands',oligo+'_L').init = copies
-    #     self.from_list('strands',oligo+'_R').init = copies
-
-    # def get_oligo_init(self, oligo):
-    #     oligo = str(oligo)
-    #     assert oligo in self.list('oligos'), f'Oligo {oligo} not found'
-    #     inits = [strand.init for strand in self.strands if str(strand)[:-2]==oligo]
-    #     # Ensure there are exactly two strands for the oligo
-    #     assert len(inits)==2
-    #     # Ensure both inits are the same
-    #     assert all(init==inits[0] for init in inits)
-    #     return inits[0]
+    @property
+    def initial_strand_copies(self):
+        return [strand.copies for strand in self.strands]
+    
+    @initial_strand_copies.setter
+    def initial_strand_copies(self,copies_list):
+        for strand,copies in zip(self.strand,copies_list):
+            strand.copies = copies
+    
+    @property
+    def initial_primer_copies(self):
+        return [primer.copies for primer in self.primers]
+    
+    @initial_primer_copies.setter
+    def initial_primer_copies(self,copies_list):
+        for primer,copies in zip(self.primers,copies_list):
+            primer.copies = copies
+            
+    @property
+    def initial_primer_nMs(self):
+        return [primer.nM for primer in self.primers]
+    
+    @initial_primer_nMs.setter
+    def initial_primer_nMs(self,nMs_list):
+        for primer,nM in zip(self.primers,nMs_list):
+            primer.nM = nM
+    
+    @property
+    def initial_copies(self):
+        return self.initial_strand_copies + self.initial_primer_copies
+    
+    @initial_copies.setter
+    def initial_copies(self,copies_list):
+        if len(copies_list) == self.n_strands+self.n_primers:
+            self.initial_strand_copies = copies_list[:self.n_strands]
+            self.initial_primer_copies = copies_list[self.n_strands:]
+        elif len(copies_list) == self.n_oligos+self.n_primers:
+            self.initial_oligo_copies = copies_list[:self.n_oligos]
+            self.initial_primer_copies = copies_list[self.n_oligos:]
+    
+    @property
+    def rates(self):
+        return [oligo.rate for oligo in self.oligos]
+    
+    @rates.setter
+    def rates(self,rates_list):
+        for oligo,rate in zip(self.oligos, rates_list):
+            oligo.rate = rate
+            
+    @property
+    def all_parameters(self):
+        log_oligo_copies = [np.log10(oligo.copies) for oligo in self.oligos]
+        primer_nMs = self.initial_primer_nMs
+        oligo_rates = self.rates
+        return log_oligo_copies + primer_nMs + oligo_rates
+    
+    @all_parameters.setter
+    def all_parameters(self,parameter_list):
+        self.initial_oligo_copies = 10**parameter_list[:self.n_oligos]
+        self.initial_primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
+        self.rates = parameter_list[:-self.n_oligos]
 
     ################################################################################
     ## Configure the necessary elements for the simulations
     ################################################################################
 
     def setDefaults(self):
-        self.rates = [self.defaults['rate']] * self.n_oligos
-        self.oligo_inits = [self.defaults['oligo_init']] * self.n_oligos*2
-        self.primer_inits = [self.defaults['primer_init']] * self.n_primers
-        self.inits = self.oligo_inits + self.primer_inits
+        for primer in self.primers:
+            primer.nM = self.defaults['primer_nM']
+        for oligo in self.oligos:
+            oligo.copies = self.defaults['oligo_copies']
+            oligo.rate = self.defaults['oligo_rate']
+            
+        self.norm = Primer('norm',nM=self.defaults['norm_nM'])
         
         for k,v in self.defaults.items():
-            if k not in ['oligo_init','rate','primer_init']:
+            if k not in ['oligo_copies','oligo_rate','norm_nM','primer_nM']:
                 setattr(self,k,v)
         # self.sweep_INT = self.INTs[self.sweep_INT_idx]
         # for oligo in self.oligos:
@@ -214,38 +350,40 @@ class PCR:
     def buildEquations(self):
         n_p = self.n_primers
         n_o = self.n_oligos
+        n_s = self.n_strands
         cm = self.connections
-        rates = self.rates
-        def equations(c,y,*rates):
+        def equations(c,copies,*rates):
             # rate-limiting contribution from each primer
             mus = np.zeros(n_p)
             for p in range(n_p):
                 # all oligos that utilize the primer
                 targets = np.argwhere(cm[:, p] != 0).flatten()
                 # strands that bind to the primer
-                strands = [y[2*oligo+(cm[oligo,p]+1)//2] for oligo in targets]
+                strands = [copies[2*oligo+(cm[oligo,p]+1)//2] for oligo in targets]
                 # total concentration of all strands that bind to the primer
                 strand_concs = np.sum(strands)
-                # position of the primer in the y vector
-                y_idx=p+2*n_o
-                mus[p] = y[y_idx]/(y[y_idx] + strand_concs)
+                # position of the primer in the copies vector
+                idx = p+n_s
+                mus[p] = copies[idx]/(copies[idx] + strand_concs)
+            # concentration of each oligo strand at the next time point
             oligo_eqns = []
             for i in range(n_o):
                 for j,strand in enumerate([-1,+1]):
                     # rate for the oligo
-                    rate = rates[i]/np.log2(np.exp(1))
+                    rate = rates[i]*np.log(2)
                     # concentration of the complementary strand
-                    complement = y[i*2+np.abs(j-1)]
+                    complement = copies[i*2+np.abs(j-1)]
                     # rate-limiting contribution from the generating primer
                     # the generating primer binds to the complementary stran+d
                     mu = mus[cm[i,:]==-strand]
                     oligo_eqns.extend(rate*complement*mu)
+            # concentration of each primer at the next time point
             primer_eqns = []
             for p in range(n_p):
                 # all oligos that utilize the primer
                 targets = np.argwhere(cm[:, p] != 0).flatten()
                 # derivatives of strands that bind to the primer
-                strands = [oligo_eqns[2*oligo+(cm[oligo,p]+1)//2] for oligo in targets]
+                strands = [oligo_eqns[2*oligo+np.abs(cm[oligo,p]-1)//2] for oligo in targets]
                 primer_eqns.append(-np.sum(strands))
             return oligo_eqns + primer_eqns
         self.eqns = equations
@@ -277,7 +415,7 @@ class PCR:
     #     self.ODE.set_integrator(integrator)
 
     def solveODE(self, **kwargs):
-        sol = integrate.solve_ivp(self.eqns, t_span=(0,self.cycles), y0=self.inits, args=self.rates,
+        sol = integrate.solve_ivp(self.eqns, t_span=(0,self.cycles), y0=self.initial_copies, args=self.rates,
                                   method=self.integrator, **kwargs)
         self.sol = sol
         return sol
