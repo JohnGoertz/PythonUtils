@@ -321,9 +321,10 @@ class PCR:
     
     @all_parameters.setter
     def all_parameters(self,parameter_list):
+        assert len(parameter_list) == self.n_oligos*2 + self.n_primers
         self.initial_oligo_copies = 10**parameter_list[:self.n_oligos]
         self.initial_primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
-        self.rates = parameter_list[:-self.n_oligos]
+        self.rates = parameter_list[-self.n_oligos:]
 
     ################################################################################
     ## Configure the necessary elements for the simulations
@@ -426,3 +427,448 @@ class PCR:
     def diffs_at(self, c):
         self.solution_at(c)
         return np.subtract(*self.signals)
+    
+    
+
+    # def timeIntegrators(self,integrators=['dopri5','RK45','dop853','RK23','BDF','lsoda','LSODA','Radau','vode'],
+    #                     compilation_time=False, with_update=False):
+    #     '''
+    #     Times the execution (and optionally compilation) of various ODE integrators
+    #     Results for a three-competitor, four-primer system with no parameter updating:
+    #     dopri5:
+    #     compile: 951 ms ± 48.4 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 34.3 ms ± 5.48 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     RK45:
+    #     compile: 945 ms ± 13.4 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 40 ms ± 1.56 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     dop853:
+    #     compile: 981 ms ± 67.7 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 31.9 ms ± 950 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     RK23:
+    #     compile: 956 ms ± 14.5 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 41.9 ms ± 1.14 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     BDF:
+    #     compile: 3.12 s ± 114 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 80.9 ms ± 2.4 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     lsoda:
+    #     compile: 3.41 s ± 373 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 30.7 ms ± 1.14 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     LSODA:
+    #     compile: 3.39 s ± 218 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 44.7 ms ± 7.32 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     Radau:
+    #     compile: 3.51 s ± 219 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 75.2 ms ± 5.95 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+
+    #     vode:
+    #     compile: 3.23 s ± 147 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
+    #     solve: 48.3 ms ± 21.7 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+    #     '''
+    #     for integrator in integrators:
+    #         print(integrator+':')
+    #         if compilation_time:
+    #             print('compile: ',end='')
+    #             %timeit self.compileODE(integrator=integrator,verbose=False)
+    #         else:
+    #             self.compileODE(integrator=integrator,verbose=False)
+    #         if with_update:
+    #             self.updateParameters()
+    #         print('solve: ',end='')
+    #         %timeit self.solveODE()
+    #         print()
+    #     pass
+
+    ################################################################################
+    ## Solution plotting functions
+    ################################################################################
+
+    # def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
+    #     if INT is None: INT=self.sweep_INT
+    #     if rng is None: rng=self.INT_rng
+    #     if res is None: res=self.INT_res
+    #     if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
+
+    #     N = len(pts)
+    #     diffs = np.zeros(N)
+    #     iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+
+    #     solutions = []
+    #     for i,INT_0 in iterator:
+    #         self.set_oligo_init(INT,10**INT_0)
+    #         self.updateParameters()
+    #         solutions.append(self.solveODE())
+    #         diffs[i] = self.get_diff()
+    #     self.diffs=diffs
+    #     return diffs, solutions
+
+    # def INT_grid(self, INT1=None, INT2=None, progress_bar=True):
+    #     if INT1 is None: INT1=self.INTs[0]
+    #     if INT2 is None: INT2=self.INTs[1]
+    #     rng = self.INT_rng
+    #     res = self.INT_res
+    #     rng = np.arange(rng[0],rng[1]+res,res)
+    #     N = len(rng)
+    #     diffs = np.zeros([N,N])
+    #     iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
+    #     for i,INT_0 in iterator:
+    #         self.set_oligo_init(INT1,10**INT_0)
+    #         for j,INT_0 in enumerate(rng):
+    #             self.set_oligo_init(INT2,10**INT_0)
+    #             self.updateParameters()
+    #             self.solveODE()
+    #             diffs[i,j] = self.get_diff()
+    #     return diffs
+
+    # def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True, cmap = FAM_HEX_cmap()):
+    #     if INT1 is None: INT1=self.INTs[0]
+    #     if INT2 is None: INT2=self.INTs[1]
+    #     diffs = self.INT_grid(INT1=INT1, INT2=INT2, progress_bar=progress_bar)
+    #     rng = self.INT_rng
+    #     res = self.INT_res
+    #     rng = np.arange(rng[0],rng[1]+res,res)
+    #     ext = np.ceil(np.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
+    #     fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+    #     pcm = ax.pcolormesh(rng,rng,diffs.T, cmap = cmap,
+    #                               vmin=-ext,vmax=ext,
+    #                               shading = 'gouraud'
+    #                         )
+    #     ax.axvline(5,color='w',linestyle=':')
+    #     ax.axhline(5,color='w',linestyle=':')
+
+    #     cbar = plt.colorbar(pcm,ticks=np.arange(-ext,ext+0.5,0.5))#, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
+    #     #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
+    #     #cbar_x0s.ax.tick_params(labelsize=16)
+    #     cntr = ax.contour(rng,rng,diffs.T,colors = 'k',
+    #                        #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
+    #                       )
+    #     plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
+    #     ax.set_aspect('equal', 'box')
+    #     ax.set_xlabel('log10 '+str(INT1))
+    #     ax.set_ylabel('log10 '+str(INT2))
+    #     return diffs
+
+    # def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
+    #     # TODO: Allow target axis to be specified for individual plots
+    #     # TODO: Plot total signal for each label
+
+    #     if INT is None: INT=self.sweep_INT
+    #     if rng is None: rng=self.INT_rng
+    #     if res is None: res=self.INT_res
+
+    #     diffs, sweep_solutions = self.INT_sweep(INT=INT, rng=rng, res=res, progress_bar=progress_bar)
+
+    #     if ax is not None: indiv=False
+
+    #     pts = np.arange(rng[0],rng[1]+res,res)
+
+    #     if indiv:
+    #         fig,gs,ind_axs = self.plotTracesGrid(sweep_solutions,pts,annotate=annotate)
+    #         ax = fig.add_subplot(gs[:,3:])
+    #         self.sweep_ax = ax
+
+    #     if update:
+    #         if self.sweep_ax is None:
+    #             _,self.sweep_ax = self.plotDiffs(diffs)
+    #         else:
+    #             self.updateDiffs(self.sweep_ax)
+    #     else:
+    #         if ax is None:
+    #             fig,ax = plt.subplots(1,1)
+    #         _,self.sweep_ax = self.plotDiffs(diffs,ax=ax)
+
+    #     if annotate in [True,'Inner','Outer']:
+    #         self.annotate_diff_plot(self.sweep_ax,pos=annotate)
+
+    #     return diffs
+
+    # def plotDiffs(self,diffs=None,ax=None,rng=None,res=None):
+    #     if diffs is None: diffs = self.diffs
+    #     if rng is None: rng = self.INT_rng
+    #     if res is None: res = self.INT_res
+    #     fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+    #     INT = self.sweep_INT
+    #     rng = np.arange(rng[0],rng[1]+res,res)
+
+    #     ax.plot(rng,diffs, color=grey(), zorder=0)
+    #     ax.scatter(rng,diffs, c=diffs, cmap=FAM_HEX_cmap(),
+    #                s=10**2, edgecolor=grey(), zorder=1,
+    #                vmin=-1, vmax=1,
+    #               )
+    #     plt.setp(ax,**{
+    #         'ylim' : [-1.05,1.05],
+    #         #'title' : '{:s}-{:s} after {:d} cycles'.format(self.labels[0],self.labels[1],self.cycles),
+    #         'ylabel' : 'Signal Difference',
+    #         'xlabel' : f'log10 {INT} copies',
+    #     })
+    #     return fig, ax
+
+    # def updateDiffs(self,ax, diffs=None, rng=None, res=None):
+    #     if diffs is None: diffs = self.diffs
+    #     if rng is None: rng = self.INT_rng
+    #     if res is None: res = self.INT_res
+    #     rng = np.arange(rng[0],rng[1]+res,res)
+    #     ax.lines[0].set_xdata(rng)
+    #     ax.lines[0].set_ydata(diffs)
+    #     for l in ax.lines[1:]: l.remove()
+    #     txts = [child for child in self.sweep_ax.get_children() if type(child)==mpl.text.Annotation]
+    #     for txt in txts: txt.remove()
+    #     ax.figure.canvas.draw()
+    #     print(self.get_diff_stats())
+
+    # def get_diff(self):
+    #     '''
+    #     Gets the endpoint signal difference from the current solution
+
+    #     Currently, this is defined by "convention" as the intensity of the alphabetically
+    #     first label (typically FAM) subtracted from the intensity of the second label
+    #     (typically HEX). Obviously, this is very fragile and inflexible and should be fixed ASAP.
+    #     '''
+    #     return (sum(self.solution[L2][-1] for L2 in self.list('label2_strands'))-
+    #             sum(self.solution[L1][-1] for L1 in self.list('label1_strands')))/self.norm
+
+    # def get_diff_stats(self, diffs=None,rng=None):
+    #     if diffs is None: diffs=self.diffs
+    #     if rng is None: rng = self.INT_rng
+    #     res = self.INT_res
+    #     rng = np.arange(rng[0],rng[1]+res,res)
+
+    #     interp_res=0.01
+    #     wt_interp = np.arange(rng[0],rng[-1]+interp_res,interp_res)
+    #     diff_interp = np.interp(wt_interp,rng,diffs)
+    #     #diff_half = (np.max(diff_interp)-np.min(diff_interp))/2+np.min(diff_interp)
+    #     diff0 = np.argmin(abs(diff_interp))
+    #     diff90 = (np.max(diff_interp)-np.min(diff_interp))*0.9+np.min(diff_interp)
+    #     diff10 = (np.max(diff_interp)-np.min(diff_interp))*0.1+np.min(diff_interp)
+
+    #     stats = {
+    #         'Zero' : wt_interp[diff0],
+    #         'DR' : np.abs(wt_interp[np.argmin(abs(diff_interp-diff10))] - wt_interp[np.argmin(abs(diff_interp-diff90))]),
+    #         'Max' : np.max(diffs),
+    #         'Min' : np.min(diffs),
+    #     }
+    #     return stats
+
+    # def annotate_diff_plot(self,ax,diffs=None,rng=None,pos='Outer'):
+    #     if diffs is None: diffs=self.diffs
+    #     if rng is None: rng=self.INT_rng
+    #     stats = self.get_diff_stats(diffs=diffs,rng=rng)
+    #     ax.axvline(stats["Zero"], ls='--', color='k', zorder=-1)
+
+    #     if pos in [True,'Outer']:
+    #         x_pos = 1.05
+    #     elif pos is 'Inner':
+    #         x_pos = 0.025
+
+    #     ax.annotate(f'Zero: {stats["Zero"]:.2f}',
+    #                  xy=(x_pos, .925), xycoords='axes fraction',
+    #                  horizontalalignment='left')
+
+    #     ax.annotate(f'DR: {stats["DR"]:.2f}',
+    #                  xy=(x_pos, .825), xycoords='axes fraction',
+    #                  horizontalalignment='left')
+
+    #     ax.annotate(f'Max: {stats["Max"]:.2f}',
+    #                  xy=(x_pos, .725), xycoords='axes fraction',
+    #                  horizontalalignment='left')
+
+    #     ax.annotate(f'Min: {stats["Min"]:.2f}',
+    #                  xy=(x_pos, .625), xycoords='axes fraction',
+    #                  horizontalalignment='left')
+
+    # def plotTraces(self,ax=None,solution=None):
+    #     fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+    #     if solution is None: solution = self.solution
+    #     L1s = self.list('label1_strands')
+    #     L2s = self.list('label2_strands')
+    #     for i,L1 in enumerate(L1s):
+    #         ax.plot(np.arange(self.cycles), solution[L1]/self.norm, color=FAM_HEX_cmap()(0+(len(L1s)-(i+1))*0.3))
+    #     for i,L2 in enumerate(L2s):
+    #         ax.plot(np.arange(self.cycles), solution[L2]/self.norm, color=FAM_HEX_cmap()(1-(len(L2s)-(i+1))*0.3))
+    #     return fig, ax
+
+    # def plotTracesGrid(self,solution_list,conc_list,annotate=True):
+    #     fig = plt.figure(constrained_layout=True,figsize=[16,5])
+    #     N = len(solution_list)
+    #     gs = fig.add_gridspec(N//3+1,6)
+    #     ind_axs = []
+    #     INT = self.sweep_INT
+    #     for i,(solution,conc) in enumerate(zip(solution_list,conc_list)):
+    #         with plt.rc_context({'axes.labelweight':'normal','font.size':14}):
+    #             ind_axs.append(fig.add_subplot(gs[i//3,i%3], sharey=ind_axs[0] if i>0 else None))
+    #             self.plotTraces(ax=ind_axs[i],solution=solution)
+    #             plt.setp(ind_axs[i].get_yticklabels(), visible=True if i%3==0 else False)
+    #             plt.setp(ind_axs[i].get_xticklabels(), visible=True if i//3+1==(N-1)//3+1 else False)
+    #             if annotate in [True,'Inner','Outer']:
+    #                 plt.annotate(f'{conc:.1f} logs {INT}', xy=(.025, .825), xycoords='axes fraction',fontsize=12)
+    #             if (i%3==0)&(i//3+1==(N-1)//3+1):
+    #                 plt.setp(ind_axs[i],**{
+    #                     'ylabel' : 'Norm Signal',
+    #                     'xlabel' : 'Cycles',
+    #                 })
+    #     return fig, gs, ind_axs
+
+    ################################################################################
+    ## Interactive configurations with simulating and plotting
+    ################################################################################
+
+    # def interactive_solve(self,**kwargs):
+    #     """Set the necessary attributes from the interactive configuration, then solve with a range of initial INT values"""
+    #     for idx, row in self.connections.iterrows():
+    #         assert set(self.select_label1.value).intersection(set(self.select_label2.value)) == set(), 'No strands may be labeled twice'
+    #         if '_'.join(idx) in self.select_label1.value:
+    #             label = self.list('labels')[0]
+    #         elif '_'.join(idx) in self.select_label2.value:
+    #             label = self.list('labels')[1]
+    #         else:
+    #             label = ''
+    #         self.connections.at[idx,'Label'] = label
+    #     self.buildLabels()
+    #     for oligo in self.oligos:
+    #         self.set_rate(oligo,kwargs['r_'+str(oligo)])
+    #     for EXT in self.EXTs:
+    #         self.set_oligo_init(EXT,10**kwargs[str(EXT)])
+    #     for p in self.primers:
+    #         self.set_primer_init(p,kwargs[str(p)])
+    #     self.norm = molar2copies(kwargs['norm']*10**-9)
+    #     self.cycles = kwargs['cycles']
+    #     self.INT_rng = self.INT_rng_widget.value
+    #     self.INT_res = np.diff(self.INT_rng)[0]/8# kwargs['INT_res']
+    #     if len(self.list('INTs'))>1:
+    #         self.sweep_INT = self.INT_selector.value
+    #         held_INTs = [INT for INT in self.list('INTs') if INT is not self.INT_selector.value]
+    #         for INT,widg in zip(held_INTs,self.INT_conc_widgets):
+    #             self.set_oligo_init(INT,10**widg.value)
+    #     if kwargs['plt_rslt']:
+    #         self.plot_INT_sweep(indiv=kwargs['indiv'], update=False)
+    #     return
+
+    # def interactive(self):
+    #     ui_concentrations = ipw.interactive(self.interactive_solve, #{'manual': True},
+    #              **{
+    #                  str(rate):ipw.FloatSlider(min=0.1, max=1.1, step=0.05, value=rate.value,
+    #                                            description=f'{str(rate)[2:]} rate', continuous_update=False)
+    #                  for rate in self.rates
+    #              },**{
+    #                  str(p):ipw.FloatSlider(min=1, max=500, step=25, value=self.get_primer_init(p),
+    #                                             description=f'nM {str(p)}', continuous_update=False)
+    #                  for p in self.primers
+    #              },**{
+    #                  str(EXT):ipw.FloatSlider(min=0, max=10, step=0.25, value=np.log10(self.get_oligo_init(EXT)),
+    #                                             description=f'logs {str(EXT)}', continuous_update=False)
+    #                  for EXT in self.EXTs
+    #              },**{
+    #              },
+    #              norm=ipw.IntSlider(min=1, max=500, step=25, value=copies2molar(self.norm)*10**9, description='Norm (nM)', continuous_update=False),
+    #              #INT_res=ipw.FloatSlider(min=0.1, max=2, step=0.05, value=self.INT_res, description='resolution', continuous_update=False),
+    #              cycles=ipw.IntSlider(min=10, max=100, value=self.cycles, description='cycles', continuous_update=False),
+    #              plt_rslt=ipw.Checkbox(value=False, description='Plot Result'),
+    #              indiv=ipw.Checkbox(value=False, description='Individual Traces'),
+    #         )
+
+    #     self.INT_rng_widget=ipw.FloatRangeSlider(min=0, max=10, step=0.1, value=self.INT_rng,
+    #                                       description=f"{self.list('INTs')[0]} range", continuous_update=False)
+
+    #     self.select_label1 = ipw.SelectMultiple(options = self.list('strands')+['None',], value = self.list('label1_strands'),
+    #                                             description = f'Label {self.list("labels")[0]:}')
+    #     self.select_label2 = ipw.SelectMultiple(options = self.list('strands')+['None',], value = self.list('label2_strands'),
+    #                                             description = f'Label {self.list("labels")[1]:}')
+
+    #     n_oligos = len(self.oligos)
+    #     n_primers = len(self.primers)
+    #     n_EXTs = len(self.EXTs)
+
+    #     col1 = n_oligos
+    #     col2 = col1+n_primers
+    #     col3 = col2+n_EXTs
+    #     col4 = col3+2
+
+    #     rate_widgets = ui_concentrations.children[:col1]
+    #     primer_widgets = ui_concentrations.children[col1:col2]
+    #     EXT_widgets = list(ui_concentrations.children[col2:col3])
+    #     INT_widgets = [self.INT_rng_widget]
+
+    #     if len(self.list('INTs'))>1:
+    #         self.INT_selector = ipw.RadioButtons(options = self.list('INTs'), description = 'Sweep:')
+    #         self.INT_conc_widgets = [ipw.FloatSlider(min=0, max=10, step=0.25, value=np.log10(self.get_oligo_init(INT)),
+    #                                                  description=f'logs {str(INT)}', continuous_update=False)
+    #                                  for INT in self.INTs if str(INT) is not self.INT_selector.value]
+    #         INT_widgets.extend(self.INT_conc_widgets)
+    #         def update_INT_widgets(*args):
+    #             self.INT_rng_widget.description = f'{self.INT_selector.value} range'
+    #             held_INTs = [INT for INT in self.list('INTs') if INT is not self.INT_selector.value]
+    #             for INT,widg in zip(held_INTs,self.INT_conc_widgets):
+    #                 widg.description = f'logs {INT}'
+    #                 widg.value=np.log10(self.get_oligo_init(INT))
+    #         self.INT_selector.observe(update_INT_widgets,'value')
+    #         INT_widgets.append(self.INT_selector)
+
+    #     oligo_widgets = EXT_widgets + INT_widgets
+
+    #     display(ipw.HBox([
+    #         ipw.VBox(rate_widgets),
+    #         ipw.VBox(primer_widgets),
+    #         ipw.VBox(EXT_widgets),
+    #         ipw.VBox(INT_widgets)
+    #     ]))
+
+    #     display(ipw.HBox([
+    #         self.select_label1,
+    #         self.select_label2,
+    #         ipw.VBox(ui_concentrations.children[col3:col4]),
+    #         ipw.VBox(ui_concentrations.children[col4:-1]),
+    #     ]))
+
+    #     display(ui_concentrations.children[-1])#Show the output
+
+class CAN(PCR):
+    
+    defaults = {**PCR.defaults,**{
+        'INT_res' : 1.,
+        'INT_rng' : [1,9],
+        'diffs' : None,
+        'sweep_INT_idx' : 0,
+        'sweep_ax' : None,
+        }}
+    
+    def __init__(self, INT_connections, EXT_connections, labels, INT_names=None, EXT_names=None, label_names=None):
+        """
+        Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
+
+        Args:
+            INTs (array): "Natural" oligos internal to the system that have design constraints.
+                A connectivity matrix of shape (n,p), where p is the number of primers in the system and n is the
+                number of INT oligos. A value of +/-1 indicates that the oligo uses the given primer, with -1
+                indicating that the primer targets the "left" or "negative" strand of an oligo and +1 indicating 
+                the "right" or "positive" strand. If possible, -1 entries should appear to before +1 entries. 
+                Note that "targeting" means "complementary" to, so a primer that targets the positive strand gets
+                extended to generate the negative strand.
+
+            EXTs (array): Synthetic oligos added to the system that have no/fewer design constraints.
+                A connectivity matrix of shape (m,p), where p is the number of primers in the system and m is the
+                number of EXT oligos.
+
+            labels (list): Specify which strands are labeled.
+                A list of vectors, each of length (n+m), indicating which strands are targeted with the given 
+                probe color
+
+        """
+
+        self.INT_matrix = INTs
+        self.n_INTs, self.n_primers = INTs.shape
+        self.INTs = [chr(ord('α')+i) for i in range(self.n_INTs)] if INT_names is None else INT_names
+        self.EXT_matrix = EXTs
+        self.n_EXTs, _ = EXTs.shape
+        self.EXTs = [chr(ord('a')+i) for i in range(self.n_EXTs)] if EXT_names is None else EXT_names
+        self.labeled_strands = labels
+        self.labels = label_names
+        self.checkInputs()
+        self.oligo_matrix = np.vstack([self.INT_matrix, self.EXT_matrix])
+        self._primers_list = [f'p{i}' for i in range(self.n_primers)]
+        self.oligos = self.INTs+self.EXTs
