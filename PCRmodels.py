@@ -255,53 +255,53 @@ class PCR:
     ################################################################################
     
     @property
-    def initial_oligo_copies(self):
+    def oligo_copies(self):
         return [oligo.copies for oligo in self.oligos]
     
-    @initial_oligo_copies.setter
-    def initial_oligo_copies(self,copies_list):
+    @oligo_copies.setter
+    def oligo_copies(self,copies_list):
         for oligo,copies in zip(self.oligos,copies_list):
             oligo.copies = copies
 
     @property
-    def initial_strand_copies(self):
+    def strand_copies(self):
         return [strand.copies for strand in self.strands]
     
-    @initial_strand_copies.setter
-    def initial_strand_copies(self,copies_list):
+    @strand_copies.setter
+    def strand_copies(self,copies_list):
         for strand,copies in zip(self.strand,copies_list):
             strand.copies = copies
     
     @property
-    def initial_primer_copies(self):
+    def primer_copies(self):
         return [primer.copies for primer in self.primers]
     
-    @initial_primer_copies.setter
-    def initial_primer_copies(self,copies_list):
+    @primer_copies.setter
+    def primer_copies(self,copies_list):
         for primer,copies in zip(self.primers,copies_list):
             primer.copies = copies
             
     @property
-    def initial_primer_nMs(self):
+    def primer_nMs(self):
         return [primer.nM for primer in self.primers]
     
-    @initial_primer_nMs.setter
-    def initial_primer_nMs(self,nMs_list):
+    @primer_nMs.setter
+    def primer_nMs(self,nMs_list):
         for primer,nM in zip(self.primers,nMs_list):
             primer.nM = nM
     
     @property
-    def initial_copies(self):
-        return self.initial_strand_copies + self.initial_primer_copies
+    def copies(self):
+        return self.strand_copies + self.primer_copies
     
-    @initial_copies.setter
-    def initial_copies(self,copies_list):
+    @copies.setter
+    def copies(self,copies_list):
         if len(copies_list) == self.n_strands+self.n_primers:
-            self.initial_strand_copies = copies_list[:self.n_strands]
-            self.initial_primer_copies = copies_list[self.n_strands:]
+            self.strand_copies = copies_list[:self.n_strands]
+            self.primer_copies = copies_list[self.n_strands:]
         elif len(copies_list) == self.n_oligos+self.n_primers:
-            self.initial_oligo_copies = copies_list[:self.n_oligos]
-            self.initial_primer_copies = copies_list[self.n_oligos:]
+            self.oligo_copies = copies_list[:self.n_oligos]
+            self.primer_copies = copies_list[self.n_oligos:]
     
     @property
     def rates(self):
@@ -315,15 +315,16 @@ class PCR:
     @property
     def all_parameters(self):
         log_oligo_copies = [np.log10(oligo.copies) for oligo in self.oligos]
-        primer_nMs = self.initial_primer_nMs
+        primer_nMs = self.primer_nMs
         oligo_rates = self.rates
         return log_oligo_copies + primer_nMs + oligo_rates
     
     @all_parameters.setter
     def all_parameters(self,parameter_list):
         assert len(parameter_list) == self.n_oligos*2 + self.n_primers
-        self.initial_oligo_copies = 10**parameter_list[:self.n_oligos]
-        self.initial_primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
+        parameter_list = np.array(parameter_list)
+        self.oligo_copies = 10**parameter_list[:self.n_oligos]
+        self.primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
         self.rates = parameter_list[-self.n_oligos:]
 
     ################################################################################
@@ -399,7 +400,7 @@ class PCR:
 
     def solveODE(self, **kwargs):
         kwargs.setdefault('dense_output',True)
-        sol = integrate.solve_ivp(self.eqns, t_span=(0,self.cycles), y0=self.initial_copies, args=self.rates,
+        sol = integrate.solve_ivp(self.eqns, t_span=(0,self.cycles), y0=self.copies, args=self.rates,
                                   method=self.integrator, **kwargs)
         self.sol = sol
         return sol
