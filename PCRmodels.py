@@ -230,7 +230,8 @@ class PCR:
             assert len(oligo_names)==self.n_oligos
             
         if label_names is None:
-            label_names = [f'L{i}' for i in range(self.n_primers)]
+            label_names = [f'L{i}' for i in range(self.n_labels)]
+            self.label_names = label_names
         else:
             assert len(label_names)==self.n_labels
             self.label_names = label_names
@@ -247,8 +248,6 @@ class PCR:
         self.primers = [Primer(name, nM=self.defaults['primer_nM']) for name in primer_names]
         self.setDefaults()
         self.buildEquations()
-        #self.buildLabels()
-        #self.compileODE(verbose=True)
 
     ################################################################################
     ## Getters and Setters
@@ -428,64 +427,60 @@ class PCR:
     def diffs_at(self, c):
         self.solution_at(c)
         return np.subtract(*self.signals)
+
+
+class CAN(PCR):
     
+    defaults = {**PCR.defaults,**{
+        'INT_res' : 1.,
+        'INT_rng' : [1,9],
+        'sweep_INT_idx' : 0,
+        'sweep_ax' : None,
+        }}
     
+    def __init__(self, INT_connections, EXT_connections, labels=None, INT_names=None, EXT_names=None, label_names=None, primer_names=None):
+        """
+        Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
 
-    # def timeIntegrators(self,integrators=['dopri5','RK45','dop853','RK23','BDF','lsoda','LSODA','Radau','vode'],
-    #                     compilation_time=False, with_update=False):
-    #     '''
-    #     Times the execution (and optionally compilation) of various ODE integrators
-    #     Results for a three-competitor, four-primer system with no parameter updating:
-    #     dopri5:
-    #     compile: 951 ms ± 48.4 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 34.3 ms ± 5.48 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+        Args:
+            INTs (array): "Natural" oligos internal to the system that have design constraints.
+                A connectivity matrix of shape (n,p), where p is the number of primers in the system and n is the
+                number of INT oligos. A value of +/-1 indicates that the oligo uses the given primer, with -1
+                indicating that the primer targets the "left" or "negative" strand of an oligo and +1 indicating 
+                the "right" or "positive" strand. If possible, -1 entries should appear to before +1 entries. 
+                Note that "targeting" means "complementary" to, so a primer that targets the positive strand gets
+                extended to generate the negative strand.
 
-    #     RK45:
-    #     compile: 945 ms ± 13.4 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 40 ms ± 1.56 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+            EXTs (array): Synthetic oligos added to the system that have no/fewer design constraints.
+                A connectivity matrix of shape (m,p), where p is the number of primers in the system and m is the
+                number of EXT oligos.
 
-    #     dop853:
-    #     compile: 981 ms ± 67.7 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 31.9 ms ± 950 µs per loop (mean ± std. dev. of 7 runs, 10 loops each)
+            labels (list): Specify which strands are labeled.
+                A list of vectors, each of length 2*(n+m), indicating which strands are targeted with the given 
+                probe color
 
-    #     RK23:
-    #     compile: 956 ms ± 14.5 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 41.9 ms ± 1.14 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
+        """
+        
+        assert INT_connections.shape[1] == EXT_connections.shape[1], 'INT and EXT matrices must have same number of columns'
 
-    #     BDF:
-    #     compile: 3.12 s ± 114 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 80.9 ms ± 2.4 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-
-    #     lsoda:
-    #     compile: 3.41 s ± 373 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 30.7 ms ± 1.14 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-
-    #     LSODA:
-    #     compile: 3.39 s ± 218 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 44.7 ms ± 7.32 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-
-    #     Radau:
-    #     compile: 3.51 s ± 219 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 75.2 ms ± 5.95 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-
-    #     vode:
-    #     compile: 3.23 s ± 147 ms per loop (mean ± std. dev. of 7 runs, 1 loop each)
-    #     solve: 48.3 ms ± 21.7 ms per loop (mean ± std. dev. of 7 runs, 10 loops each)
-    #     '''
-    #     for integrator in integrators:
-    #         print(integrator+':')
-    #         if compilation_time:
-    #             print('compile: ',end='')
-    #             %timeit self.compileODE(integrator=integrator,verbose=False)
-    #         else:
-    #             self.compileODE(integrator=integrator,verbose=False)
-    #         if with_update:
-    #             self.updateParameters()
-    #         print('solve: ',end='')
-    #         %timeit self.solveODE()
-    #         print()
-    #     pass
-
+        self.INT_matrix = INT_connections
+        self.EXT_matrix = EXT_connections
+        self.n_INTs, self.n_primers = self.INT_matrix.shape
+        self.n_EXTs, _ = self.EXT_matrix.shape
+        
+        if INT_names  is None:
+            INT_names = [chr(ord('α')+i) for i in range(self.n_INTs)]
+        if EXT_names is None:
+            EXT_names = [chr(ord('a')+i) for i in range(self.n_EXTs)]
+        oligo_names = INT_names + EXT_names
+        self.connections = np.vstack([self.INT_matrix, self.EXT_matrix])
+        
+        super(CAN, self).__init__(self.connections, labels=labels, oligo_names=oligo_names, label_names=label_names, primer_names=primer_names)
+        
+        self.INTs = self.oligos[:self.n_INTs]
+        self.EXTs = self.oligos[self.n_INTs:]
+        
+    
     ################################################################################
     ## Solution plotting functions
     ################################################################################
@@ -827,49 +822,3 @@ class PCR:
     #     ]))
 
     #     display(ui_concentrations.children[-1])#Show the output
-
-class CAN(PCR):
-    
-    defaults = {**PCR.defaults,**{
-        'INT_res' : 1.,
-        'INT_rng' : [1,9],
-        'diffs' : None,
-        'sweep_INT_idx' : 0,
-        'sweep_ax' : None,
-        }}
-    
-    def __init__(self, INT_connections, EXT_connections, labels, INT_names=None, EXT_names=None, label_names=None):
-        """
-        Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
-
-        Args:
-            INTs (array): "Natural" oligos internal to the system that have design constraints.
-                A connectivity matrix of shape (n,p), where p is the number of primers in the system and n is the
-                number of INT oligos. A value of +/-1 indicates that the oligo uses the given primer, with -1
-                indicating that the primer targets the "left" or "negative" strand of an oligo and +1 indicating 
-                the "right" or "positive" strand. If possible, -1 entries should appear to before +1 entries. 
-                Note that "targeting" means "complementary" to, so a primer that targets the positive strand gets
-                extended to generate the negative strand.
-
-            EXTs (array): Synthetic oligos added to the system that have no/fewer design constraints.
-                A connectivity matrix of shape (m,p), where p is the number of primers in the system and m is the
-                number of EXT oligos.
-
-            labels (list): Specify which strands are labeled.
-                A list of vectors, each of length (n+m), indicating which strands are targeted with the given 
-                probe color
-
-        """
-
-        self.INT_matrix = INTs
-        self.n_INTs, self.n_primers = INTs.shape
-        self.INTs = [chr(ord('α')+i) for i in range(self.n_INTs)] if INT_names is None else INT_names
-        self.EXT_matrix = EXTs
-        self.n_EXTs, _ = EXTs.shape
-        self.EXTs = [chr(ord('a')+i) for i in range(self.n_EXTs)] if EXT_names is None else EXT_names
-        self.labeled_strands = labels
-        self.labels = label_names
-        self.checkInputs()
-        self.oligo_matrix = np.vstack([self.INT_matrix, self.EXT_matrix])
-        self._primers_list = [f'p{i}' for i in range(self.n_primers)]
-        self.oligos = self.INTs+self.EXTs
