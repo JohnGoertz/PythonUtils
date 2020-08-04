@@ -216,6 +216,7 @@ class PCR:
         self.n_oligos, self.n_primers = connections.shape
         self.n_strands = self.n_oligos*2
         
+        # If no labels supplied, "label" the "-" strand of every oligo
         if labels is None:
             self.labels = [[]]
             self.labels[0].extend([1,0] for _ in range(self.n_oligos))
@@ -413,6 +414,70 @@ class PCR:
         self.solution = solution
         return self.solution
     
+    def solution_sweep(self, oligos=[0], rng=[1,9], res=1):
+        '''
+        Calculates solutions for a range of oligo concentrations
+        
+        Args:
+            oligos (list): Indices of oligos to be swept.
+                Can be oligo names or numeric indices corresponding to the list
+                self.oligos.
+                
+            rng (list): Concentration range (in log scale) for each oligo.
+                Can either be a two-element list or a list of two-element lists.
+                If a 1D list, the range is applied to all oligos indicated by
+                `idx`. Otherwise, each element corresponds to the range of each
+                oligo in `idx`.
+                
+            res (float or list): Concentration resolution (in decades) of sweep.
+                Can either be a single value or a 1D list. If a single value, 
+                resolution is applied to all oligos. Otherwise, each element 
+                corresponds to the resolution of each oligo in `idx`.
+                
+        Returns:
+            sweep_solution (array): An array containing the `diffs` at each test point
+                Note that if the input arrays have lengths 2,3,4,5,... then the 
+                output array will be of shape 3,2,4,5,...
+                
+        '''
+        assert self.n_labels == 2, 'solution_sweep is only supported for exactly two labels'
+        assert type(oligos) is list
+        n_oligos = len(oligos)
+        
+        if type(res) is not list:
+            # Isotropic grid, same range and resolution for every oligo
+            assert all(type(el) is not list for el in rng)
+            rng = [rng for _ in range(n_oligos)]
+            res = [res for _ in range(n_oligos)]
+        else:
+            # Anisotropic grid, different range and resolution for each oligo
+            assert type(rng) is list
+            assert all(type(rng_) is list for rng_ in rng)
+            assert all(len(rng_) == 2 for rng_ in rng)
+            assert type(res) is list
+            assert len(rng) == n_oligos
+            assert len(res) == n_oligos
+        
+        # Build 1D arrays and multidimensional meshgrids of all evaluation points
+        arrays = [np.arange(rng_[0], rng_[1]+res_,res_) for rng_,res_ in zip(rng,res)]
+        grids = np.meshgrid(*arrays)
+        pts = np.vstack([grid.ravel() for grid in grids]).T
+        sweep_solution = np.zeros(pts.shape[0])
+        for i,pt in enumerate(pts):
+            # Clear any previous solution
+            self.sol, self.solution = [None,None]
+            # Set the oligo concentrations accordingly
+            for oligo,lg_copies in zip(oligos,pt):
+                if type(oligo) is str:
+                    oligo = [str(oligo_) for oligo_ in self.oligos].index(oligo)
+                self.oligos[oligo].copies = 10**lg_copies
+            sweep_solution[i] = self.diffs
+        
+        # Reshape sweep_solution into a grid
+        self.sweep_solution = np.array(sweep_solution).T.reshape(*grids[0].shape)
+        return self.sweep_solution
+        
+    
     @property
     def signals(self):
         if self.solution is None: self.solution_at(self.cycles)
@@ -485,24 +550,25 @@ class CAN(PCR):
     ## Solution plotting functions
     ################################################################################
 
-    # def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
-    #     if INT is None: INT=self.sweep_INT
-    #     if rng is None: rng=self.INT_rng
-    #     if res is None: res=self.INT_res
-    #     if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
 
-    #     N = len(pts)
-    #     diffs = np.zeros(N)
-    #     iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
+        if INT is None: INT=self.sweep_INT
+        if rng is None: rng=self.INT_rng
+        if res is None: res=self.INT_res
+        if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
 
-    #     solutions = []
-    #     for i,INT_0 in iterator:
-    #         self.set_oligo_init(INT,10**INT_0)
-    #         self.updateParameters()
-    #         solutions.append(self.solveODE())
-    #         diffs[i] = self.get_diff()
-    #     self.diffs=diffs
-    #     return diffs, solutions
+        N = len(pts)
+        diffs = np.zeros(N)
+        iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+
+        solutions = []
+        for i,INT_0 in iterator:
+            self.set_oligo_init(INT,10**INT_0)
+            self.updateParameters()
+            solutions.append(self.solveODE())
+            diffs[i] = self.get_diff()
+        self.diffs=diffs
+        return diffs, solutions
 
     # def INT_grid(self, INT1=None, INT2=None, progress_bar=True):
     #     if INT1 is None: INT1=self.INTs[0]
