@@ -1,15 +1,16 @@
-import numpy as np
+from autograd import numpy as np
+from autograd.scipy.integrate import odeint
 import scipy.integrate as integrate
-import pandas as pd
-import seaborn as sns
-import matplotlib.pyplot as plt
+# import pandas as pd
+# import seaborn as sns
+# import matplotlib.pyplot as plt
 import matplotlib as mpl
-import ipywidgets as ipw
-from tqdm.notebook import tqdm
+# import ipywidgets as ipw
+# from tqdm.notebook import tqdm
 
-import shelve
-import gc
-import warnings
+# import shelve
+# import gc
+# import warnings
 
 
 def copies2molar(copies):
@@ -269,7 +270,7 @@ class PCR:
     
     @strand_copies.setter
     def strand_copies(self,copies_list):
-        for strand,copies in zip(self.strand,copies_list):
+        for strand,copies in zip(self.strands,copies_list):
             strand.copies = copies
     
     @property
@@ -355,9 +356,9 @@ class PCR:
         n_o = self.n_oligos
         n_s = self.n_strands
         cm = self.connections
-        def equations(c,copies,*rates):
+        def equations(copies,c,rates):
             # rate-limiting contribution from each primer
-            mus = np.zeros(n_p)
+            mus = []
             for p in range(n_p):
                 # all oligos that utilize the primer
                 targets = np.argwhere(cm[:, p] != 0).flatten()
@@ -367,7 +368,8 @@ class PCR:
                 strand_concs = np.sum(strands)
                 # position of the primer in the copies vector
                 idx = p+n_s
-                mus[p] = copies[idx]/(copies[idx] + strand_concs)
+                mus.append(copies[idx]/(copies[idx] + strand_concs))
+            mus = np.array(mus)
             # concentration of each oligo strand at the next time point
             oligo_eqns = []
             for i in range(n_o):
@@ -388,7 +390,7 @@ class PCR:
                 # derivatives of strands that bind to the primer
                 strands = [oligo_eqns[2*oligo+np.abs(cm[oligo,p]-1)//2] for oligo in targets]
                 primer_eqns.append(-np.sum(strands))
-            return oligo_eqns + primer_eqns
+            return np.array(oligo_eqns + primer_eqns)
         self.eqns = equations
         return self.eqns
 
@@ -398,15 +400,17 @@ class PCR:
     ################################################################################
 
 
-    def solveODE(self, **kwargs):
+    def solve_ivp(self, **kwargs):
         kwargs.setdefault('dense_output',True)
-        sol = integrate.solve_ivp(self.eqns, t_span=(0,self.cycles), y0=self.copies, args=self.rates,
+        def eq(c,copies,rates):
+            return self.eqns(copies,c,rates)
+        sol = integrate.solve_ivp(eq, t_span=(0,self.cycles), y0=self.copies, args=tuple((np.array(self.rates),)),
                                   method=self.integrator, **kwargs)
         self.sol = sol
         return sol
     
     def solution_at(self, c):
-        if self.sol is None: self.solveODE()
+        if self.sol is None: self.solve_ivp()
         solution = self.sol.sol(c)
         # Ensure solution is an array of shape (n_s+n_p, len(c)) 
         if solution.ndim==1:
@@ -414,7 +418,14 @@ class PCR:
         self.solution = solution
         return self.solution
     
-    def solution_sweep(self, oligos=[0], rng=[1,9], res=1):
+    def odeint(self):
+        solution = odeint(self.eqns,np.array(self.copies),np.arange(self.cycles),tuple((np.array(self.rates),)))
+        self.sol = solution
+        self.solution = solution[-1,:][:,None]
+        return self.solution
+        
+    
+    def solution_sweep(self, oligos=[0], rng=[1,9], res=1, method='odeint'):
         '''
         Calculates solutions for a range of oligo concentrations
         
@@ -436,8 +447,8 @@ class PCR:
                 
         Returns:
             sweep_solution (array): An array containing the `diffs` at each test point
-                Note that if the input arrays have lengths 2,3,4,5,... then the 
-                output array will be of shape 3,2,4,5,...
+                Note that if the oligos swept are indices 0,1,2,3,3,... then the 
+                axes of the output array will correspond to oligos 1,0,2,3,4...
                 
         '''
         assert self.n_labels == 2, 'solution_sweep is only supported for exactly two labels'
@@ -471,6 +482,10 @@ class PCR:
                 if type(oligo) is str:
                     oligo = [str(oligo_) for oligo_ in self.oligos].index(oligo)
                 self.oligos[oligo].copies = 10**lg_copies
+            if method == 'odeint':
+                self.odeint()
+            elif method == 'solve_ivp':
+                self.solve_ivp()
             sweep_solution[i] = self.diffs
         
         # Reshape sweep_solution into a grid
