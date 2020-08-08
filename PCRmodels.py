@@ -1,4 +1,6 @@
 from autograd import numpy as np
+from autograd import grad
+from autograd.builtins import tuple
 from autograd.scipy.integrate import odeint
 import scipy.integrate as integrate
 # import pandas as pd
@@ -284,7 +286,7 @@ class PCR:
             
     @property
     def primer_nMs(self):
-        return [primer.nM for primer in self.primers]
+        return np.array([primer.nM for primer in self.primers])
     
     @primer_nMs.setter
     def primer_nMs(self,nMs_list):
@@ -293,7 +295,7 @@ class PCR:
     
     @property
     def copies(self):
-        return self.strand_copies + self.primer_copies
+        return np.array(self.strand_copies + self.primer_copies)
     
     @copies.setter
     def copies(self,copies_list):
@@ -306,10 +308,11 @@ class PCR:
     
     @property
     def rates(self):
-        return [oligo.rate for oligo in self.oligos]
+        return np.array([oligo.rate for oligo in self.oligos])
     
     @rates.setter
     def rates(self,rates_list):
+        rates_list=np.array(rates_list)
         for oligo,rate in zip(self.oligos, rates_list):
             oligo.rate = rate
             
@@ -318,12 +321,12 @@ class PCR:
         log_oligo_copies = [np.log10(oligo.copies) for oligo in self.oligos]
         primer_nMs = self.primer_nMs
         oligo_rates = self.rates
-        return log_oligo_copies + primer_nMs + oligo_rates
+        return np.hstack([log_oligo_copies,primer_nMs, oligo_rates])
     
     @all_parameters.setter
     def all_parameters(self,parameter_list):
         assert len(parameter_list) == self.n_oligos*2 + self.n_primers
-        parameter_list = np.array(parameter_list)
+        #parameter_list = np.array(parameter_list)
         self.oligo_copies = 10**parameter_list[:self.n_oligos]
         self.primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
         self.rates = parameter_list[-self.n_oligos:]
@@ -380,8 +383,8 @@ class PCR:
                     complement = copies[i*2+np.abs(j-1)]
                     # rate-limiting contribution from the generating primer
                     # the generating primer binds to the complementary stran+d
-                    mu = mus[cm[i,:]==-strand]
-                    oligo_eqns.extend(rate*complement*mu)
+                    mu = mus[cm[i,:]==-strand][0]
+                    oligo_eqns.append(complement*mu*rate)
             # concentration of each primer at the next time point
             primer_eqns = []
             for p in range(n_p):
@@ -391,6 +394,7 @@ class PCR:
                 strands = [oligo_eqns[2*oligo+np.abs(cm[oligo,p]-1)//2] for oligo in targets]
                 primer_eqns.append(-np.sum(strands))
             return np.array(oligo_eqns + primer_eqns)
+
         self.eqns = equations
         return self.eqns
 
@@ -473,7 +477,7 @@ class PCR:
         arrays = [np.arange(rng_[0], rng_[1]+res_,res_) for rng_,res_ in zip(rng,res)]
         grids = np.meshgrid(*arrays)
         pts = np.vstack([grid.ravel() for grid in grids]).T
-        sweep_solution = np.zeros(pts.shape[0])
+        sweep_solution = []#np.zeros(pts.shape[0])
         for i,pt in enumerate(pts):
             # Clear any previous solution
             self.sol, self.solution = [None,None]
@@ -485,8 +489,8 @@ class PCR:
             if method == 'odeint':
                 self.odeint()
             elif method == 'solve_ivp':
-                self.solve_ivp()
-            sweep_solution[i] = self.diffs
+                self.solution_at(self.cycles)
+            sweep_solution.append(self.diffs)
         
         # Reshape sweep_solution into a grid
         self.sweep_solution = np.array(sweep_solution).T.reshape(*grids[0].shape)
