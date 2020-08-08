@@ -23,6 +23,15 @@ def molar2copies(moles):
     #Calculates number of copies in a 10 μL volume
     return moles * 6.022e23 * (10*10**-6)
 
+def calc_tau(rate,init,norm):
+    return -np.log(init/norm)/(rate*np.log(2))
+def calc_rho(rate,init,norm):
+    return -np.log(rate*np.log(2))/np.log(calc_tau(rate,init,norm))
+def calc_rate(τ,ρ):
+    return τ**(-ρ)/np.log(2)
+def calc_init(τ,ρ,norm):
+    return norm*np.exp(-τ**(1-ρ))
+
 def FAM_HEX_cmap(N = 64, sat = 'mid'):
     rosest = {
         'light' : [199/256, 57/256, 101/256],
@@ -317,19 +326,73 @@ class PCR:
             oligo.rate = rate
             
     @property
-    def all_parameters(self):
+    def copies_rates_nMs(self):
+        '''
+        Returns a list of key reaction parameters in natural units:
+        
+        Initial copies of each oligo in log10 scale, initial concentration of
+        primers in nanomolar, and the rates of each oligo
+        '''
         log_oligo_copies = [np.log10(oligo.copies) for oligo in self.oligos]
         primer_nMs = self.primer_nMs
         oligo_rates = self.rates
-        return np.hstack([log_oligo_copies,primer_nMs, oligo_rates])
+        return np.hstack([log_oligo_copies,oligo_rates,primer_nMs])
     
-    @all_parameters.setter
-    def all_parameters(self,parameter_list):
-        assert len(parameter_list) == self.n_oligos*2 + self.n_primers
+    @copies_rates_nMs.setter
+    def copies_rates_nMs(self,params):
+        n_o = self.n_oligos
+        n_p = self.n_primers
+        assert len(params) == n_o*2 + n_p
         #parameter_list = np.array(parameter_list)
-        self.oligo_copies = 10**parameter_list[:self.n_oligos]
-        self.primer_nMs = parameter_list[self.n_oligos:-self.n_oligos]
-        self.rates = parameter_list[-self.n_oligos:]
+        self.oligo_copies = 10**params[:n_o]
+        self.rates = params[n_o:-n_p]
+        self.primer_nMs = params[-n_p:]
+            
+    @property
+    def taus_rhos_nMs(self):
+        '''
+        Returns the τ and ρ values for each oligo and primer concentrations in nanomolar
+        
+        This alternative parameterization provides a parameter space more amenable
+        to optimization. When optimizing in the "standard" parameter space, the rate and
+        initial copy number of a given oligo are tightly correlated: a long, narrow band 
+        of value pairs give rise to nearly-optimal fits. The τ-ρ space is significantly
+        less correlated, improving the likelihood of discovering the global optimum.
+        '''
+        return np.hstack([self.oligo_taus,self.oligo_rhos,self.primer_nMs])
+    
+    @taus_rhos_nMs.setter
+    def taus_rhos_nMs(self,params):
+        n_o = self.n_oligos
+        n_p = self.n_primers
+        norm = self.norm.copies
+        taus = params[:n_o]
+        rhos = params[n_o:-n_p]
+        nMs = params[-n_p:]
+        assert len(params) == n_o*2 + n_p
+        self.oligo_copies = [calc_init(τ,ρ,norm) for τ,ρ in zip(taus,rhos)]
+        self.rates = [calc_rate(τ,ρ) for τ,ρ in zip(taus,rhos)]
+        self.primer_nMs = nMs
+                
+    @property
+    def oligo_taus(self):
+        '''
+        Returns the τ parameter for each oligo.
+        
+        Cannot be set directly. Set via `taus_rhos_nMs` property
+        '''
+        return [calc_tau(oligo.rate,oligo.copies,self.norm.copies)
+                for oligo in self.oligos]
+                
+    @property
+    def oligo_rhos(self):
+        '''
+        Returns the ρ parameter for each oligo.
+        
+        Cannot be set directly. Set via `taus_rhos_nMs` property
+        '''
+        return [calc_rho(oligo.rate,oligo.copies,self.norm.copies)
+                for oligo in self.oligos]
 
     ################################################################################
     ## Configure the necessary elements for the simulations
