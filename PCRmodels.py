@@ -3,6 +3,7 @@ from autograd import grad
 from autograd.builtins import tuple
 from autograd.scipy.integrate import odeint
 import scipy.integrate as integrate
+import ipdb
 # import pandas as pd
 # import seaborn as sns
 # import matplotlib.pyplot as plt
@@ -16,11 +17,11 @@ import matplotlib as mpl
 
 
 def copies2molar(copies):
-    #Calculates concentration in a 10 μL volume
+    '''Calculates concentration in a 10 μL volume'''
     return copies / 6.022e23 / (10*10**-6)
 
 def molar2copies(moles):
-    #Calculates number of copies in a 10 μL volume
+    '''Calculates number of copies in a 10 μL volume'''
     return moles * 6.022e23 * (10*10**-6)
 
 def calc_tau(rate,init,norm):
@@ -189,6 +190,14 @@ class Oligo(Strand):
             
 
 class PCR:
+    """
+    Monod simulation of a PCR reaction system.
+    
+    A reaction consists of a set of Primers and Oligos whose interactions are 
+    specified via a connectivity matrix. Lists containing these objects are 
+    stored in a PCR instance `rxn` via the `rxn.primers` and `rxn.oligos` 
+    properties, respectively; `rxn.strands` behaves similarly. 
+    """
 
     defaults = {
         'oligo_copies' : 10**5,
@@ -198,12 +207,19 @@ class PCR:
         'cycles' : 60,
         'sol' : None,
         'solution' : None,
-        'integrator' : 'RK45',
+        'integrator' : 'LSODA',
     }
 
     def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None):
         """
         Constructs a Monod simulation of a PCR reaction system.
+        
+        Example:
+            ```python
+            OR_gate = np.array([[-1, 0, +1, 0, 0], [0, -1, +1, 0, 0], [0, 0, -1, +1, 0], [0, 0, 0, -1, +1]])
+            OR_labels = [[0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0]]
+            rxn = pcr.PCR(OR_gate,OR_labels)
+            ```
 
         Args:
             connections (array): A connectivity matrix of shape (n,p) 
@@ -237,27 +253,35 @@ class PCR:
             self.labels = labels
         self.n_labels = len(self.labels)
         
+        # If no oligo names are supplied, name each oligo with successive latin letters
         if oligo_names is None:
             oligo_names = [chr(ord('a')+i) for i in range(self.n_oligos)]
         else:
             assert len(oligo_names)==self.n_oligos
-            
+        self.oligo_names = oligo_names
+        
+        # If no label names are supplied, name each label L0, L1, etc
         if label_names is None:
             label_names = [f'L{i}' for i in range(self.n_labels)]
-            self.label_names = label_names
         else:
             assert len(label_names)==self.n_labels
-            self.label_names = label_names
-            
+        self.label_names = label_names
+        
+        # If no primer names are supplied, name each primer p0, p1, etc
         if primer_names is None:
             primer_names = [f'p{i}' for i in range(self.n_primers)]
         else:
             assert len(primer_names)==self.n_primers
+        self.primer_names = primer_names
         
+        # A list storing each oligo as an Oligo object
         self.oligos = [Oligo(name, self.defaults['oligo_rate'], self.defaults['oligo_copies']) for name in oligo_names]
+        
+        # A list storing each strand as an Strand object
         self.strands = []
         for oligo in self.oligos:
             self.strands.extend(oligo.strands)
+        # A list storing each primer as a Primer object
         self.primers = [Primer(name, nM=self.defaults['primer_nM']) for name in primer_names]
         self.setDefaults()
         self.buildEquations()
@@ -266,8 +290,27 @@ class PCR:
     ## Getters and Setters
     ################################################################################
     
+    def oligo(self, name):
+        '''Get an oligo by name or number'''
+        if type(name) is int:
+            return self.oligos[name]
+        if type(name) is str:
+            return self.oligos[self.oligo_names.index(name)]
+    
+    def strand(self, name):
+        '''Get a strand by name'''
+        idx = [strand.name for strand in self.strands].index(name)
+        return self.strands[idx]
+    
+    def primer(self, name):
+        '''Get a primer by name or number'''
+        if type(name) is int:
+            name = f'p{name}'
+        return self.primers[self.primer_names.index(name)]
+    
     @property
     def oligo_copies(self):
+        '''Returns the concentration, in copies, of each oligo in the reaction'''
         return [oligo.copies for oligo in self.oligos]
     
     @oligo_copies.setter
@@ -277,6 +320,7 @@ class PCR:
 
     @property
     def strand_copies(self):
+        '''Returns the concentration, in copies, of each strand in the reaction'''
         return [strand.copies for strand in self.strands]
     
     @strand_copies.setter
@@ -286,6 +330,7 @@ class PCR:
     
     @property
     def primer_copies(self):
+        '''Returns the concentration, in copies, of each primer in the reaction'''
         return [primer.copies for primer in self.primers]
     
     @primer_copies.setter
@@ -295,6 +340,7 @@ class PCR:
             
     @property
     def primer_nMs(self):
+        '''Returns the concentration, in nanomolar, of each primer in the reaction'''
         return np.array([primer.nM for primer in self.primers])
     
     @primer_nMs.setter
@@ -304,10 +350,17 @@ class PCR:
     
     @property
     def copies(self):
+        '''Returns an array of the concentration in copies for each strand, then each primer, in the reaction'''
         return np.array(self.strand_copies + self.primer_copies)
     
     @copies.setter
     def copies(self,copies_list):
+        '''
+        Sets the concentration, in copies, of all reaction components
+        
+        The supplied list can either specify the copies of each oligo, then each 
+        primer, or the copies of every strand, then each primer
+        '''
         if len(copies_list) == self.n_strands+self.n_primers:
             self.strand_copies = copies_list[:self.n_strands]
             self.primer_copies = copies_list[self.n_strands:]
@@ -317,6 +370,7 @@ class PCR:
     
     @property
     def rates(self):
+        '''Returns an array of the rates for each oligo in the reaction'''
         return np.array([oligo.rate for oligo in self.oligos])
     
     @rates.setter
@@ -353,7 +407,7 @@ class PCR:
         '''
         Returns the τ and ρ values for each oligo and primer concentrations in nanomolar
         
-        This alternative parameterization provides a parameter space more amenable
+        This alternative parameterization may provide a parameter space more amenable
         to optimization. When optimizing in the "standard" parameter space, the rate and
         initial copy number of a given oligo are tightly correlated: a long, narrow band 
         of value pairs give rise to nearly-optimal fits. The τ-ρ space is significantly
@@ -468,6 +522,10 @@ class PCR:
 
 
     def solve_ivp(self, **kwargs):
+        '''
+        Method profiling:
+            
+        '''
         kwargs.setdefault('dense_output',True)
         def eq(c,copies,rates):
             return self.eqns(copies,c,rates)
@@ -486,13 +544,13 @@ class PCR:
         return self.solution
     
     def odeint(self):
-        solution = odeint(self.eqns,np.array(self.copies),np.arange(self.cycles),tuple((np.array(self.rates),)))
+        solution = odeint(self.eqns,self.copies,np.arange(self.cycles),tuple((self.rates,)))
         self.sol = solution
         self.solution = solution[-1,:][:,None]
         return self.solution
         
     
-    def solution_sweep(self, oligos=[0], rng=[1,9], res=1, method='odeint'):
+    def solution_sweep(self, oligos=[0], rng=[1,10], res=1, method='solve_ivp', mode='loop'):
         '''
         Calculates solutions for a range of oligo concentrations
         
@@ -540,24 +598,43 @@ class PCR:
         arrays = [np.arange(rng_[0], rng_[1]+res_,res_) for rng_,res_ in zip(rng,res)]
         grids = np.meshgrid(*arrays)
         pts = np.vstack([grid.ravel() for grid in grids]).T
-        sweep_solution = []#np.zeros(pts.shape[0])
-        for i,pt in enumerate(pts):
-            # Clear any previous solution
-            self.sol, self.solution = [None,None]
-            # Set the oligo concentrations accordingly
-            for oligo,lg_copies in zip(oligos,pt):
-                if type(oligo) is str:
-                    oligo = [str(oligo_) for oligo_ in self.oligos].index(oligo)
-                self.oligos[oligo].copies = 10**lg_copies
-            if method == 'odeint':
-                self.odeint()
-            elif method == 'solve_ivp':
-                self.solution_at(self.cycles)
-            sweep_solution.append(self.diffs)
         
+        if mode == 'vectorized':
+            n_copies = len(self.copies)
+            n_pts = len(pts)
+            
+            tiled_copies = np.tile(self.copies,n_pts)
+            mask = np.array([1 if i//2 in oligos else 0 for i in range(n_copies)])
+            tiled_mask = np.tile(mask, n_pts)
+            value_mask = np.hstack([10**i*mask for i in pts.flatten()])
+            tiled_copies = tiled_copies - tiled_mask*tiled_copies + tiled_mask*value_mask
+                
+            def vectorized_eqns(copies_list, c, rates):
+                return np.hstack([self.eqns(copies_list[i*n_copies:(i+1)*n_copies], c, rates)
+                                  for i in range(n_pts)])
+        
+            sweep_solution = odeint(vectorized_eqns, tiled_copies, np.arange(self.cycles), tuple((self.rates,)))[-1,:]
+            sweep_strands = np.reshape(sweep_solution,[n_pts,-1])[:,:self.n_strands]/self.norm.copies
+            sweep_signals = [np.sum(sweep_strands[:,np.array(label, dtype=bool)], axis=1) for label in self.labels]
+            sweep_diffs = np.subtract(*sweep_signals)
+        else:
+            sweep_diffs = []
+            for i,pt in enumerate(pts):
+                # Clear any previous solution
+                self.sol, self.solution = [None,None]
+                # Set the oligo concentrations accordingly
+                for oligo,lg_copies in zip(oligos,pt):
+                    if type(oligo) is str:
+                        oligo = [str(oligo_) for oligo_ in self.oligos].index(oligo)
+                    self.oligos[oligo].copies = 10**lg_copies
+                if method == 'odeint':
+                    self.odeint()
+                elif method == 'solve_ivp':
+                    self.solution_at(self.cycles)
+                sweep_diffs.append(self.diffs)
         # Reshape sweep_solution into a grid
-        self.sweep_solution = np.array(sweep_solution).T.reshape(*grids[0].shape)
-        return self.sweep_solution
+        self.sweep_diffs = np.array(sweep_diffs).T.reshape(*grids[0].shape)
+        return self.sweep_diffs
         
     
     @property
