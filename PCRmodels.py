@@ -394,6 +394,7 @@ class PCR:
     
     @copies_rates_nMs.setter
     def copies_rates_nMs(self,params):
+        params=np.array(params)
         n_o = self.n_oligos
         n_p = self.n_primers
         assert len(params) == n_o*2 + n_p
