@@ -10,7 +10,7 @@ config.update('jax_enable_x64', True)
 
 
 # import seaborn as sns
-# import matplotlib.pyplot as plt
+import matplotlib.pyplot as plt
 import matplotlib as mpl
 # import ipywidgets as ipw
 # from tqdm.notebook import tqdm
@@ -43,25 +43,25 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
         'mid'  : [179/256, 0/256, 47/256],
         'dark' : [162/256, 0/256, 70/256],
     }
-    roses = np.ones((N,4))
+    roses = onp.ones((N,4))
     for i in range(3):
-        roses[:,i] = np.linspace(rosest[sat][i], 1, N)
+        roses[:,i] = onp.linspace(rosest[sat][i], 1, N)
 
     tealest = {
         'light' : [35/256, 135/256, 127/256],
         'mid'  : [10/256, 111/256, 103/256],
         'dark' : [0/256, 102/256, 94/256],
     }
-    teals = np.ones((N,4))
+    teals = onp.ones((N,4))
     for i in range(3):
-        teals[:,i] = np.linspace(1, tealest[sat][i], N)
+        teals[:,i] = onp.linspace(1, tealest[sat][i], N)
 
-    concat_colors = np.vstack((roses,teals))
+    concat_colors = onp.vstack((roses,teals))
     cmap = mpl.colors.ListedColormap(concat_colors, name='RsTl')
 
-    teals = mpl.cm.get_cmap('BrBG',N*2)(np.linspace(0.5,0.9,N))
-    oranges = mpl.cm.get_cmap('PuOr',N*2)(np.linspace(0.1,0.5,N))
-    concat_colors = np.vstack((oranges,teals))[::-1]
+    teals = mpl.cm.get_cmap('BrBG',N*2)(onp.linspace(0.5,0.8,N))
+    oranges = mpl.cm.get_cmap('PuOr',N*2)(onp.linspace(0.2,0.5,N))
+    concat_colors = onp.vstack((oranges,teals))[::-1]
     cmap = mpl.colors.ListedColormap(concat_colors, name='OrBG')
 
     return cmap
@@ -209,9 +209,10 @@ class PCR:
         'primer_nM' : 100.,
         'norm_nM' : 100.,
         'cycles' : 60.,
+        'solution' : None,
     }
 
-    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None, compile_eqns=True):
+    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None, compile_eqns=True, disable_checks=False):
         """
         Constructs a Monod simulation of a PCR reaction system.
         
@@ -237,9 +238,10 @@ class PCR:
 
         """
 
-        assert all(np.sum(connections==-1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
-        assert all(np.sum(connections==+1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
-        assert all(np.sum(connections!=0, axis=1) == 2), 'All rows of connections must have exactly two non-zero values'
+        if not disable_checks:
+            assert all(np.sum(connections==-1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
+            assert all(np.sum(connections==+1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
+            assert all(np.sum(connections!=0, axis=1) == 2), 'All rows of connections must have exactly two non-zero values'
         
         self.connections = np.array(connections,dtype=float)
         self.s_cm = self._make_s_cm(self.connections)
@@ -253,7 +255,7 @@ class PCR:
             labels = [[]]
             labels[0].extend([1,0] for _ in range(self.n_oligos))
         else:
-            assert all(len(label)==self.n_strands for label in labels)
+            if not disable_checks: assert all(len(label)==self.n_strands for label in labels)
         self.labels = np.array(labels,dtype=float)
         self.n_labels = len(self.labels)
         
@@ -261,21 +263,21 @@ class PCR:
         if oligo_names is None:
             oligo_names = [chr(ord('a')+i) for i in range(self.n_oligos)]
         else:
-            assert len(oligo_names)==self.n_oligos
+            if not disable_checks: assert len(oligo_names)==self.n_oligos
         self.oligo_names = oligo_names
         
         # If no label names are supplied, name each label L0, L1, etc
         if label_names is None:
             label_names = [f'L{i}' for i in range(self.n_labels)]
         else:
-            assert len(label_names)==self.n_labels
+            if not disable_checks: assert len(label_names)==self.n_labels
         self.label_names = label_names
         
         # If no primer names are supplied, name each primer p0, p1, etc
         if primer_names is None:
             primer_names = [f'p{i}' for i in range(self.n_primers)]
         else:
-            assert len(primer_names)==self.n_primers
+            if not disable_checks: assert len(primer_names)==self.n_primers
         self.primer_names = primer_names
         
         # A list storing each oligo as an Oligo object
@@ -318,7 +320,7 @@ class PCR:
         for primer in self.primers:
             primer.nM = self.defaults['primer_nM']
         for oligo in self.oligos:
-            oligo.copies = self.defaults['oligo_copies']
+            oligo.oligo_copies = self.defaults['oligo_copies']
             oligo.rate = self.defaults['oligo_rate']
             
         self.norm = Primer('norm',nM=self.defaults['norm_nM'])
@@ -329,13 +331,15 @@ class PCR:
                 setattr(self,k,v)
                 
     @staticmethod
-    def _make_s_cm(cm):
+    def _make_p_cm(cm):
+        '''Primer that binds to the given strand'''
         n_o, n_p = cm.shape
         n_s = n_o*2
         return np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
     
     @staticmethod
-    def _make_p_cm(cm):
+    def _make_s_cm(cm):
+        '''Primer that generates to the given strand'''
         n_o, n_p = cm.shape
         n_s = n_o*2
         return np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
@@ -349,16 +353,16 @@ class PCR:
         primers = copies[n_s:]
     
         # rate-limiting contribution from each primer
-        mus = primers/(primers+np.dot(strands,s_cm))
+        mus = primers/(primers+np.dot(strands,p_cm))
         
         # concentration of the complementary strand
         complements = np.reshape(np.reshape(strands[:,None],[n_o,2])[:,::-1],[n_s,1])
     
         # derivative of each strand
-        strands_dt = complements*strand_rates*np.dot(p_cm,mus)[:,None]
+        strands_dt = complements*strand_rates*np.dot(s_cm,mus)[:,None]
     
         # derivative of each primer
-        primers_dt = -np.sum(strands_dt*p_cm, axis=0)
+        primers_dt = -np.sum(strands_dt*s_cm, axis=0)
         return np.hstack([np.squeeze(strands_dt),primers_dt])
 
     def compileEquations(self):
@@ -381,7 +385,7 @@ class PCR:
         
         p_cm = self.p_cm if p_cm is None else p_cm
         
-        return self._solve(copies, copies, cycles, strand_rates, s_cm, p_cm)
+        return self._solve(copies, cycles, strand_rates, s_cm, p_cm)
 
 
     ################################################################################
@@ -555,11 +559,14 @@ class PCR:
 class CAN(PCR):
     
     defaults = {**PCR.defaults,**{
-        'res' : 1.,
-        'rng' : [1.,9.],
+        'sweep_res' : 1.,
+        'sweep_rng' : [1.,9.],
         }}
     
-    def __init__(self, INT_connections, EXT_connections, labels=None, INT_names=None, EXT_names=None, label_names=None, primer_names=None, setup=True, compile_eqns=True):
+    def __init__(self, INT_connections, EXT_connections, labels=None,
+                 INT_names=None, EXT_names=None, label_names=None, primer_names=None,
+                 setup=True, sweep_res=1., sweep_rng=[1.,9.],
+                 compile_eqns=True, disable_checks=False,):
         """
         Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
 
@@ -597,16 +604,20 @@ class CAN(PCR):
         
         super(CAN, self).__init__(connections, labels=labels, oligo_names=oligo_names,
                                   label_names=label_names, primer_names=primer_names, 
-                                  compile_eqns=False)
+                                  compile_eqns=False, disable_checks=disable_checks)
         
         self.INTs = self.oligos[:self.n_INTs]
         self.INT_idxs = np.arange(self.n_INTs)
         self.EXTs = self.oligos[self.n_INTs:]
         
+        self.sweep_res = sweep_res
+        self.sweep_rng = sweep_rng
+        
         if setup:
             self.setup_solution_sweep()
         if compile_eqns:
             self.compileEquations()
+            
             
     
     def __str__(self):
@@ -638,9 +649,9 @@ class CAN(PCR):
         if oligos is None:
             oligos = self.INT_idxs
         if rng is None:
-            rng = self.rng
+            rng = self.sweep_rng
         if res is None:
-            res = self.res
+            res = self.sweep_res
             
         n_oligos = len(oligos)
             
@@ -710,14 +721,18 @@ class CAN(PCR):
         # primer that binds to each strand
         p_cm = np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
         # reshape connection matrix and rates to correspond to each strand instead of each oligo
-        strand_rates = np.reshape(np.tile(rates,[2,1]),[n_s,1],order='F')*np.log(2)
+        strand_rates = np.reshape(np.tile(rates,[2,1]),[n_s,1],order='F')
         
         update_idx = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
         
         diffs = jax.vmap(lambda pt: self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels))(pts)
             
         # Reshape sweep_solution into a grid
-        diffs = np.array(diffs).T.reshape(*grids[0].shape).transpose([1,0,*np.arange(2,len(oligos))])
+        diffs = np.array(diffs).T.reshape(*grids[0].shape)
+        if diffs.ndim>1:
+            diffs = diffs.transpose([1,0,*np.arange(2,len(oligos))])
+            
+        self.solution = diffs
         return diffs
     
     def solution_sweep(self, copies=None, cycles=None, rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
@@ -768,11 +783,71 @@ class CAN(PCR):
         self.solution_sweep()
         
         
+    ################################################################################
+    ## Solution plotting functions
+    ################################################################################
+ 
+    def plot_1D_solution(self, diffs=None, ax=None, crosshairs=[5,5], contour=True, cbar=True, pmesh_kws=None, contour_kws=None, cbar_kws=None):   
+        pass
+ 
+    def plot_2D_solution(self, diffs=None, ax=None, crosshairs=[5,5], contour=True, cbar=True, pmesh_kws=None, contour_kws=None, cbar_kws=None):
+        diffs = self.solution_sweep() if diffs is None else diffs
+        diffs = onp.array(diffs)
+        rng = self.sweep_rng
+        res = self.sweep_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        ext = np.ceil(onp.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
+        fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
         
+        pmesh_defaults = {'cmap':FAM_HEX_cmap(),
+                          'vmin':-ext,'vmax':ext,
+                          'shading':'gouraud'
+                          }
+        pmesh_kws = {**pmesh_defaults,**pmesh_kws} if pmesh_kws is not None else pmesh_defaults
+        
+        pcm = ax.pcolormesh(rng,rng,diffs, **pmesh_kws)
+        
+        if crosshairs[0] is not None:
+            ax.axvline(crosshairs[0],color='w',linestyle=':')
+        if crosshairs[1] is not None:
+            ax.axhline(crosshairs[1],color='w',linestyle=':')
+
+        cbar_defaults = {'ticks':np.arange(pmesh_kws['vmin'],pmesh_kws['vmax']+0.5,0.5)}
+        cbar_kws = {**cbar_defaults,**cbar_kws} if cbar_kws is not None else cbar_defaults
+        cbar = plt.colorbar(pcm, ax=ax, **cbar_kws)
+        #, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
+        #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
+        #cbar_x0s.ax.tick_params(labelsize=16)
+            
+        contour_defaults = {'colors':'k'}
+        contour_kws = {**contour_defaults,**contour_kws} if contour_kws is not None else contour_defaults
+        
+        if contour:
+            cntr = ax.contour(rng,rng,diffs,**contour_kws)
+            plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
+        ax.set_aspect('equal', 'box')
+        ax.set_xlabel('log10 '+str(self.INTs[0]))
+        ax.set_ylabel('log10 '+str(self.INTs[1]))
+        return pcm
+
+    def plot_solution_sweep(self,**kws):
+        if self.n_INTs==1:
+            return self.plot_1D_solution(**kws)
+        elif self.n_INTs==2:
+            return self.plot_2D_solution(**kws)
+
+    def plot_objective(self, **kws):
+        if self.n_INTs==1:
+            return self.plot_1D_solution(**kws)
+        elif self.n_INTs==2:
+            kws.setdefault('contour',False)
+            return self.plot_2D_solution(diffs=self.obj, **kws)
+        
+    
     
 class Learn(CAN):
     
-    defaults = {**CAN.defaults,**{
+    defaults = {**PCR.defaults,**{
         'oligo_bounds': (1.,10.),
         'rate_bounds': (0.5,1.),
         'primer_bounds': (10.,500.),
@@ -780,11 +855,13 @@ class Learn(CAN):
 
     def __init__(self, obj, INT_connections, EXT_connections, labels=None,
                  INT_names=None, EXT_names=None, label_names=None, primer_names=None,
-                 setup=True, compile_eqns=True):
+                 setup=True, sweep_res=1., sweep_rng=[1.,9.],
+                 compile_eqns=True, disable_checks=False):
         super(Learn, self).__init__(INT_connections, EXT_connections, labels=labels,
                                   INT_names=INT_names, EXT_names=EXT_names, 
                                   label_names=label_names, primer_names=primer_names,
-                                  setup=setup, compile_eqns=False)
+                                  setup=setup, sweep_res=sweep_res, sweep_rng=sweep_rng,
+                                  compile_eqns=False, disable_checks=disable_checks)
         self.obj = obj
         self.fit_params = self.copies_rates_nMs[self.n_INTs:]
         if compile_eqns:
@@ -793,9 +870,7 @@ class Learn(CAN):
     
     def compileEquations(self):
         super(Learn, self).compileEquations()
-        #self._loss_full = jax.jit(self._loss_full)
         self.loss = jax.jit(self.loss)
-        self.loss_full()
         self.loss(self.copies_rates_nMs[self.n_INTs:],self.connections,self.labels)
         
 
@@ -856,11 +931,9 @@ class Learn(CAN):
                   [self.primer_bounds for _ in range(self.n_primers)])
         
         self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
+        self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
         return self.fit_result
 
-    # ################################################################################
-    # ## Solution plotting functions
-    # ################################################################################
 
 
     # def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
@@ -883,34 +956,7 @@ class Learn(CAN):
     #     return diffs, solutions
     
     
-    # def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True, cmap = FAM_HEX_cmap()):
-    #     if INT1 is None: INT1=self.INTs[0]
-    #     if INT2 is None: INT2=self.INTs[1]
-    #     diffs = self.INT_grid(INT1=INT1, INT2=INT2, progress_bar=progress_bar)
-    #     rng = self.INT_rng
-    #     res = self.INT_res
-    #     rng = np.arange(rng[0],rng[1]+res,res)
-    #     ext = np.ceil(np.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
-    #     fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
-    #     pcm = ax.pcolormesh(rng,rng,diffs, cmap = cmap,
-    #                               vmin=-ext,vmax=ext,
-    #                               shading = 'gouraud'
-    #                         )
-    #     ax.axvline(5,color='w',linestyle=':')
-    #     ax.axhline(5,color='w',linestyle=':')
-
-    #     cbar = plt.colorbar(pcm,ticks=np.arange(-ext,ext+0.5,0.5))#, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
-    #     #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
-    #     #cbar_x0s.ax.tick_params(labelsize=16)
-    #     cntr = ax.contour(rng,rng,diffs,colors = 'k',
-    #                        #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
-    #                       )
-    #     plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
-    #     ax.set_aspect('equal', 'box')
-    #     ax.set_xlabel('log10 '+str(INT1))
-    #     ax.set_ylabel('log10 '+str(INT2))
-    #     return diffs
-
+   
     # def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
     #     # TODO: Allow target axis to be specified for individual plots
     #     # TODO: Plot total signal for each label
