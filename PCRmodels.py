@@ -1,10 +1,14 @@
-from autograd import numpy as np
-from autograd import grad
-from autograd.builtins import tuple
-from autograd.scipy.integrate import odeint
-import scipy.integrate as integrate
-import ipdb
-# import pandas as pd
+import numpy as onp
+from scipy.optimize import minimize
+import time
+
+import jax
+from jax import numpy as np
+from jax.experimental.ode import odeint
+from jax.config import config
+config.update('jax_enable_x64', True)
+
+
 # import seaborn as sns
 # import matplotlib.pyplot as plt
 import matplotlib as mpl
@@ -200,24 +204,21 @@ class PCR:
     """
 
     defaults = {
-        'oligo_copies' : 10**5,
+        'oligo_copies' : 10**5.,
         'oligo_rate' : 0.9,
-        'primer_nM' : 100,
-        'norm_nM' : 100,
-        'cycles' : 60,
-        'sol' : None,
-        'solution' : None,
-        'integrator' : 'LSODA',
+        'primer_nM' : 100.,
+        'norm_nM' : 100.,
+        'cycles' : 60.,
     }
 
-    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None):
+    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None, compile_eqns=True):
         """
         Constructs a Monod simulation of a PCR reaction system.
         
         Example:
             ```python
             OR_gate = np.array([[-1, 0, +1, 0, 0], [0, -1, +1, 0, 0], [0, 0, -1, +1, 0], [0, 0, 0, -1, +1]])
-            OR_labels = [[0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0]]
+            OR_labels = np.array([[0, 0, 0, 0, 1, 0, 0, 0], [0, 0, 0, 0, 0, 0, 1, 0]])
             rxn = pcr.PCR(OR_gate,OR_labels)
             ```
 
@@ -240,17 +241,20 @@ class PCR:
         assert all(np.sum(connections==+1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
         assert all(np.sum(connections!=0, axis=1) == 2), 'All rows of connections must have exactly two non-zero values'
         
-        self.connections = connections
+        self.connections = np.array(connections,dtype=float)
+        self.s_cm = self._make_s_cm(self.connections)
+        self.p_cm = self._make_p_cm(self.connections)
+        
         self.n_oligos, self.n_primers = connections.shape
         self.n_strands = self.n_oligos*2
         
         # If no labels supplied, "label" the "-" strand of every oligo
         if labels is None:
-            self.labels = [[]]
-            self.labels[0].extend([1,0] for _ in range(self.n_oligos))
+            labels = [[]]
+            labels[0].extend([1,0] for _ in range(self.n_oligos))
         else:
             assert all(len(label)==self.n_strands for label in labels)
-            self.labels = labels
+        self.labels = np.array(labels,dtype=float)
         self.n_labels = len(self.labels)
         
         # If no oligo names are supplied, name each oligo with successive latin letters
@@ -283,8 +287,102 @@ class PCR:
             self.strands.extend(oligo.strands)
         # A list storing each primer as a Primer object
         self.primers = [Primer(name, nM=self.defaults['primer_nM']) for name in primer_names]
+        
+        # Initialize
         self.setDefaults()
-        self.buildEquations()
+        if compile_eqns:
+            self.compileEquations()
+            
+
+    def __str__(self):
+        summary = {'Connections':self.connections,
+                   'Labels':self.labels,
+                   'Oligos (log copies)': onp.log10(self.oligo_copies),
+                   'Rates (base 2)':self.rates,
+                   'Primers (nM)':self.primer_nMs,
+                   }
+        m = max(map(len, list(summary.keys()))) + 1
+        return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
+                  for k, v in sorted(summary.items())])
+
+    def __repr__(self):
+        return self.__str__()
+    
+    
+
+    ################################################################################
+    ## Configure the necessary elements for the simulations
+    ################################################################################
+
+    def setDefaults(self):
+        for primer in self.primers:
+            primer.nM = self.defaults['primer_nM']
+        for oligo in self.oligos:
+            oligo.copies = self.defaults['oligo_copies']
+            oligo.rate = self.defaults['oligo_rate']
+            
+        self.norm = Primer('norm',nM=self.defaults['norm_nM'])
+        self.rhs = self._rhs
+        
+        for k,v in self.defaults.items():
+            if k not in ['oligo_copies','oligo_rate','norm_nM','primer_nM']:
+                setattr(self,k,v)
+                
+    @staticmethod
+    def _make_s_cm(cm):
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+        return np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
+    
+    @staticmethod
+    def _make_p_cm(cm):
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+        return np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
+
+    @staticmethod  
+    def _rhs(copies,c,strand_rates,s_cm,p_cm):
+        n_s, n_p = s_cm.shape
+        n_o = n_s//2
+    
+        strands = copies[:n_s]
+        primers = copies[n_s:]
+    
+        # rate-limiting contribution from each primer
+        mus = primers/(primers+np.dot(strands,s_cm))
+        
+        # concentration of the complementary strand
+        complements = np.reshape(np.reshape(strands[:,None],[n_o,2])[:,::-1],[n_s,1])
+    
+        # derivative of each strand
+        strands_dt = complements*strand_rates*np.dot(p_cm,mus)[:,None]
+    
+        # derivative of each primer
+        primers_dt = -np.sum(strands_dt*p_cm, axis=0)
+        return np.hstack([np.squeeze(strands_dt),primers_dt])
+
+    def compileEquations(self):
+        self.rhs = jax.jit(self._rhs)
+        self.rhs(self.copies,1.,self.strand_rates,self.s_cm,self.p_cm)
+        
+        
+    def _solve(self,copies,cycles,strand_rates,s_cm,p_cm):
+        return odeint(self.rhs,copies,cycles,strand_rates,s_cm,p_cm)
+    
+    def solve(self,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None):
+        
+        copies = self.copies if copies is None else copies
+        
+        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
+        
+        strand_rates = self.strand_rates if strand_rates is None else strand_rates
+        
+        s_cm = self.s_cm if s_cm is None else s_cm
+        
+        p_cm = self.p_cm if p_cm is None else p_cm
+        
+        return self._solve(copies, copies, cycles, strand_rates, s_cm, p_cm)
+
 
     ################################################################################
     ## Getters and Setters
@@ -380,6 +478,10 @@ class PCR:
             oligo.rate = rate
             
     @property
+    def strand_rates(self):
+        return np.reshape(np.tile(self.rates,[2,1]),[self.n_strands,1],order='F')
+            
+    @property
     def copies_rates_nMs(self):
         '''
         Returns a list of key reaction parameters in natural units:
@@ -449,221 +551,15 @@ class PCR:
         return [calc_rho(oligo.rate,oligo.copies,self.norm.copies)
                 for oligo in self.oligos]
 
-    ################################################################################
-    ## Configure the necessary elements for the simulations
-    ################################################################################
-
-    def setDefaults(self):
-        for primer in self.primers:
-            primer.nM = self.defaults['primer_nM']
-        for oligo in self.oligos:
-            oligo.copies = self.defaults['oligo_copies']
-            oligo.rate = self.defaults['oligo_rate']
-            
-        self.norm = Primer('norm',nM=self.defaults['norm_nM'])
-        
-        for k,v in self.defaults.items():
-            if k not in ['oligo_copies','oligo_rate','norm_nM','primer_nM']:
-                setattr(self,k,v)
-        # self.sweep_INT = self.INTs[self.sweep_INT_idx]
-        # for oligo in self.oligos:
-        #     self.set_oligo_init(oligo,dflt['oligo_inits'])
-        #     self.set_rate(oligo,dflt['rates'])
-        # for primer in self.primers:
-        #     self.set_primer_init(primer,dflt['primer_inits'])
-
-    def buildEquations(self):
-        n_p = self.n_primers
-        n_o = self.n_oligos
-        n_s = self.n_strands
-        cm = self.connections
-        def equations(copies,c,rates):
-            # rate-limiting contribution from each primer
-            mus = []
-            for p in range(n_p):
-                # all oligos that utilize the primer
-                targets = np.argwhere(cm[:, p] != 0).flatten()
-                # strands that bind to the primer
-                strands = [copies[2*oligo+(cm[oligo,p]+1)//2] for oligo in targets]
-                # total concentration of all strands that bind to the primer
-                strand_concs = np.sum(strands)
-                # position of the primer in the copies vector
-                idx = p+n_s
-                mus.append(copies[idx]/(copies[idx] + strand_concs))
-            mus = np.array(mus)
-            # concentration of each oligo strand at the next time point
-            oligo_eqns = []
-            for i in range(n_o):
-                for j,strand in enumerate([-1,+1]):
-                    # rate for the oligo
-                    rate = rates[i]*np.log(2)
-                    # concentration of the complementary strand
-                    complement = copies[i*2+np.abs(j-1)]
-                    # rate-limiting contribution from the generating primer
-                    # the generating primer binds to the complementary stran+d
-                    mu = mus[cm[i,:]==-strand][0]
-                    oligo_eqns.append(complement*mu*rate)
-            # concentration of each primer at the next time point
-            primer_eqns = []
-            for p in range(n_p):
-                # all oligos that utilize the primer
-                targets = np.argwhere(cm[:, p] != 0).flatten()
-                # derivatives of strands that bind to the primer
-                strands = [oligo_eqns[2*oligo+np.abs(cm[oligo,p]-1)//2] for oligo in targets]
-                primer_eqns.append(-np.sum(strands))
-            return np.array(oligo_eqns + primer_eqns)
-
-        self.eqns = equations
-        return self.eqns
-
-
-    ################################################################################
-    ## Running a simulation
-    ################################################################################
-
-
-    def solve_ivp(self, **kwargs):
-        '''
-        Method profiling:
-            
-        '''
-        kwargs.setdefault('dense_output',True)
-        def eq(c,copies,rates):
-            return self.eqns(copies,c,rates)
-        sol = integrate.solve_ivp(eq, t_span=(0,self.cycles), y0=self.copies, args=tuple((np.array(self.rates),)),
-                                  method=self.integrator, **kwargs)
-        self.sol = sol
-        return sol
-    
-    def solution_at(self, c):
-        if self.sol is None: self.solve_ivp()
-        solution = self.sol.sol(c)
-        # Ensure solution is an array of shape (n_s+n_p, len(c)) 
-        if solution.ndim==1:
-            solution = solution[:,None]
-        self.solution = solution
-        return self.solution
-    
-    def odeint(self):
-        solution = odeint(self.eqns,self.copies,np.arange(self.cycles),tuple((self.rates,)))
-        self.sol = solution
-        self.solution = solution[-1,:][:,None]
-        return self.solution
-        
-    
-    def solution_sweep(self, oligos=[0], rng=[1,10], res=1, method='solve_ivp', mode='loop'):
-        '''
-        Calculates solutions for a range of oligo concentrations
-        
-        Args:
-            oligos (list): Indices of oligos to be swept.
-                Can be oligo names or numeric indices corresponding to the list
-                self.oligos.
-                
-            rng (list): Concentration range (in log scale) for each oligo.
-                Can either be a two-element list or a list of two-element lists.
-                If a 1D list, the range is applied to all oligos indicated by
-                `idx`. Otherwise, each element corresponds to the range of each
-                oligo in `idx`.
-                
-            res (float or list): Concentration resolution (in decades) of sweep.
-                Can either be a single value or a 1D list. If a single value, 
-                resolution is applied to all oligos. Otherwise, each element 
-                corresponds to the resolution of each oligo in `idx`.
-                
-        Returns:
-            sweep_solution (array): An array containing the `diffs` at each test point
-                Note that if the oligos swept are indices 0,1,2,3,3,... then the 
-                axes of the output array will correspond to oligos 1,0,2,3,4...
-                
-        '''
-        assert self.n_labels == 2, 'solution_sweep is only supported for exactly two labels'
-        assert type(oligos) is list
-        n_oligos = len(oligos)
-        
-        if type(res) is not list:
-            # Isotropic grid, same range and resolution for every oligo
-            assert all(type(el) is not list for el in rng)
-            rng = [rng for _ in range(n_oligos)]
-            res = [res for _ in range(n_oligos)]
-        else:
-            # Anisotropic grid, different range and resolution for each oligo
-            assert type(rng) is list
-            assert all(type(rng_) is list for rng_ in rng)
-            assert all(len(rng_) == 2 for rng_ in rng)
-            assert type(res) is list
-            assert len(rng) == n_oligos
-            assert len(res) == n_oligos
-        
-        # Build 1D arrays and multidimensional meshgrids of all evaluation points
-        arrays = [np.arange(rng_[0], rng_[1]+res_,res_) for rng_,res_ in zip(rng,res)]
-        grids = np.meshgrid(*arrays)
-        pts = np.vstack([grid.ravel() for grid in grids]).T
-        
-        if mode == 'vectorized':
-            n_copies = len(self.copies)
-            n_pts = len(pts)
-            
-            tiled_copies = np.tile(self.copies,n_pts)
-            mask = np.array([1 if i//2 in oligos else 0 for i in range(n_copies)])
-            tiled_mask = np.tile(mask, n_pts)
-            value_mask = np.hstack([10**i*mask for i in pts.flatten()])
-            tiled_copies = tiled_copies - tiled_mask*tiled_copies + tiled_mask*value_mask
-                
-            def vectorized_eqns(copies_list, c, rates):
-                return np.hstack([self.eqns(copies_list[i*n_copies:(i+1)*n_copies], c, rates)
-                                  for i in range(n_pts)])
-        
-            sweep_solution = odeint(vectorized_eqns, tiled_copies, np.arange(self.cycles), tuple((self.rates,)))[-1,:]
-            sweep_strands = np.reshape(sweep_solution,[n_pts,-1])[:,:self.n_strands]/self.norm.copies
-            sweep_signals = [np.sum(sweep_strands[:,np.array(label, dtype=bool)], axis=1) for label in self.labels]
-            sweep_diffs = np.subtract(*sweep_signals)
-        else:
-            sweep_diffs = []
-            for i,pt in enumerate(pts):
-                # Clear any previous solution
-                self.sol, self.solution = [None,None]
-                # Set the oligo concentrations accordingly
-                for oligo,lg_copies in zip(oligos,pt):
-                    if type(oligo) is str:
-                        oligo = [str(oligo_) for oligo_ in self.oligos].index(oligo)
-                    self.oligos[oligo].copies = 10**lg_copies
-                if method == 'odeint':
-                    self.odeint()
-                elif method == 'solve_ivp':
-                    self.solution_at(self.cycles)
-                sweep_diffs.append(self.diffs)
-        # Reshape sweep_solution into a grid
-        self.sweep_diffs = np.array(sweep_diffs).T.reshape(*grids[0].shape)
-        return self.sweep_diffs
-        
-    
-    @property
-    def signals(self):
-        if self.solution is None: self.solution_at(self.cycles)
-        
-        strand_solution = self.solution[:self.n_strands,:]/self.norm.copies
-        return [strand_solution[np.array(strands,dtype=bool),:].sum(axis=0) for strands in self.labels]
-    
-    @property
-    def diffs(self):
-        return np.subtract(*self.signals)
-    
-    def diffs_at(self, c):
-        self.solution_at(c)
-        return np.subtract(*self.signals)
-
 
 class CAN(PCR):
     
     defaults = {**PCR.defaults,**{
-        'INT_res' : 1.,
-        'INT_rng' : [1,9],
-        'sweep_INT_idx' : 0,
-        'sweep_ax' : None,
+        'res' : 1.,
+        'rng' : [1.,9.],
         }}
     
-    def __init__(self, INT_connections, EXT_connections, labels=None, INT_names=None, EXT_names=None, label_names=None, primer_names=None):
+    def __init__(self, INT_connections, EXT_connections, labels=None, INT_names=None, EXT_names=None, label_names=None, primer_names=None, setup=True, compile_eqns=True):
         """
         Constructs a competitive reaction system consisting of multiple oligos, some of which are labeled.
 
@@ -685,69 +581,308 @@ class CAN(PCR):
                 probe color
 
         """
-        
         assert INT_connections.shape[1] == EXT_connections.shape[1], 'INT and EXT matrices must have same number of columns'
 
-        self.INT_matrix = INT_connections
-        self.EXT_matrix = EXT_connections
-        self.n_INTs, self.n_primers = self.INT_matrix.shape
-        self.n_EXTs, _ = self.EXT_matrix.shape
+        self.INT_cm = INT_connections
+        self.EXT_cm = EXT_connections
+        self.n_INTs, self.n_primers = self.INT_cm.shape
+        self.n_EXTs, _ = self.EXT_cm.shape
         
         if INT_names  is None:
             INT_names = [chr(ord('α')+i) for i in range(self.n_INTs)]
         if EXT_names is None:
             EXT_names = [chr(ord('a')+i) for i in range(self.n_EXTs)]
         oligo_names = INT_names + EXT_names
-        self.connections = np.vstack([self.INT_matrix, self.EXT_matrix])
+        connections = np.vstack([self.INT_cm, self.EXT_cm])
         
-        super(CAN, self).__init__(self.connections, labels=labels, oligo_names=oligo_names, label_names=label_names, primer_names=primer_names)
+        super(CAN, self).__init__(connections, labels=labels, oligo_names=oligo_names,
+                                  label_names=label_names, primer_names=primer_names, 
+                                  compile_eqns=False)
         
         self.INTs = self.oligos[:self.n_INTs]
+        self.INT_idxs = np.arange(self.n_INTs)
         self.EXTs = self.oligos[self.n_INTs:]
+        
+        if setup:
+            self.setup_solution_sweep()
+        if compile_eqns:
+            self.compileEquations()
+            
+    
+    def __str__(self):
+        summary = {'INT Connections':self.INT_cm,
+                   'EXT Connections':self.EXT_cm,
+                   'Labels':self.labels,
+                   'Oligos (log copies)': onp.log10(self.oligo_copies),
+                   'Rates (base 2)':self.rates,
+                   'Primers (nM)':self.primer_nMs,
+                   }
+        m = max(map(len, list(summary.keys()))) + 1
+        return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
+                  for k, v in sorted(summary.items())])
         
     
     ################################################################################
-    ## Solution plotting functions
+    ## Running a simulation
     ################################################################################
 
+    @staticmethod
+    def _setup_solution_sweep(oligos, rng, res):
+        arrays = [np.arange(rng_[0], rng_[1]+res_,res_) for rng_,res_ in zip(rng,res)]
+        grids = np.meshgrid(*arrays)
+        pts = np.vstack([grid.ravel() for grid in grids]).T
+        return arrays, grids, pts, oligos
+        
+    def setup_solution_sweep(self, oligos=None, rng=None, res=None):
+        '''Build 1D arrays and multidimensional meshgrids of all evaluation points'''
+        if oligos is None:
+            oligos = self.INT_idxs
+        if rng is None:
+            rng = self.rng
+        if res is None:
+            res = self.res
+            
+        n_oligos = len(oligos)
+            
+        if type(res) is not list:
+            # Isotropic grid, same range and resolution for every oligo
+            assert all(type(el) is not list for el in rng)
+            rng = [rng for _ in range(n_oligos)]
+            res = [res for _ in range(n_oligos)]
+        else:
+            # Anisotropic grid, different range and resolution for each oligo
+            assert type(rng) is list
+            assert all(type(rng_) is list for rng_ in rng)
+            assert all(len(rng_) == 2 for rng_ in rng)
+            assert type(res) is list
+            assert len(rng) == n_oligos
+            assert len(res) == n_oligos
+        
+        if type(res) is not list:
+            # Isotropic grid, same range and resolution for every oligo
+            assert all(type(el) is not list for el in rng)
+            rng = [rng for _ in range(n_oligos)]
+            res = [res for _ in range(n_oligos)]
+        self.sweep_setup = self._setup_solution_sweep(oligos, rng, res)
+        return self.sweep_setup
+    
+    def _get_diffs(self,pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels):
+        n_s,_ = s_cm.shape
+        # Set the oligo concentrations accordingly
+        update_vals = np.squeeze(np.reshape(10**np.vstack([pt,pt]),[2*len(pt),1],order='F'))
+        copies = jax.ops.index_update(copies,update_idx,update_vals, indices_are_sorted=True, unique_indices=True)
+        solution = self._solve(copies,cycles,strand_rates,s_cm,p_cm)[-1,:]
+        strands = solution[:n_s]/norm
+        signals = np.dot(labels,strands)
+        return -np.diff(signals)
+    
+    def get_diffs(self,pt=None,rhs=None,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None,update_idx=None,norm=None,labels=None):
+        if rhs==None:
+            rhs=self.rhs
+        if copies==None:
+            copies=self.copies
+        if cycles==None:
+            cycles=np.arange(self.cycles+1,dtype=float)
+        if strand_rates==None:
+            strand_rates=self.strand_rates
+        if s_cm==None:
+            s_cm=self.s_cm
+        if p_cm==None:
+            p_cm=self.p_cm
+        if update_idx==None:
+            update_idx = []
+        if norm==None:
+            norm=self.norm
+        if labels==None:
+            labels=self.labels
+        return self._get_diffs(pt,rhs,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels)
+            
 
-    def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
-        if INT is None: INT=self.sweep_INT
-        if rng is None: rng=self.INT_rng
-        if res is None: res=self.INT_res
-        if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
+    
+    def _solution_sweep(self, copies, cycles, rates, cm, labels, arrays, grids, pts, oligos):
+        norm = molar2copies(100*1e-9)
+        oligos = np.array(oligos)
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+        
+        # primer that generates each strand
+        s_cm = np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
+        # primer that binds to each strand
+        p_cm = np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
+        # reshape connection matrix and rates to correspond to each strand instead of each oligo
+        strand_rates = np.reshape(np.tile(rates,[2,1]),[n_s,1],order='F')*np.log(2)
+        
+        update_idx = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
+        
+        diffs = jax.vmap(lambda pt: self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels))(pts)
+            
+        # Reshape sweep_solution into a grid
+        diffs = np.array(diffs).T.reshape(*grids[0].shape).transpose([1,0,*np.arange(2,len(oligos))])
+        return diffs
+    
+    def solution_sweep(self, copies=None, cycles=None, rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
+        '''
+        Calculates solutions for a range of oligo concentrations
+        
+        Args:
+            oligos (list): Indices of oligos to be swept.
+                Can be oligo names or numeric indices corresponding to the list
+                self.oligos.
+                
+            rng (list): Concentration range (in log scale) for each oligo.
+                Can either be a two-element list or a list of two-element lists.
+                If a 1D list, the range is applied to all oligos indicated by
+                `idx`. Otherwise, each element corresponds to the range of each
+                oligo in `idx`.
+                
+            res (float or list): Concentration resolution (in decades) of sweep.
+                Can either be a single value or a 1D list. If a single value, 
+                resolution is applied to all oligos. Otherwise, each element 
+                corresponds to the resolution of each oligo in `idx`.
+                
+        Returns:
+            sweep_solution (array): An array containing the `diffs` at each test point
+                
+        '''
+        
+        copies = self.copies if copies is None else copies
+        
+        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
+        
+        rates = self.rates if rates is None else rates
+        
+        cm = self.connections if cm is None else cm
+        
+        labels = self.labels if labels is None else labels
+        
+        if None in [arrays, grids, pts, oligos]:
+            arrays, grids, pts, oligos = self.sweep_setup
+            
+        return self._solution_sweep(copies, cycles, rates, cm, labels, arrays, grids, pts, oligos)
+    
+    
+    
+    def compileEquations(self):
+        super(CAN, self).compileEquations()
+        self._solution_sweep = jax.jit(self._solution_sweep)
+        self.solution_sweep()
+        
+        
+        
+    
+class Learn(CAN):
+    
+    defaults = {**CAN.defaults,**{
+        'oligo_bounds': (1.,10.),
+        'rate_bounds': (0.5,1.),
+        'primer_bounds': (10.,500.),
+        }}
 
-        N = len(pts)
-        diffs = np.zeros(N)
-        iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+    def __init__(self, obj, INT_connections, EXT_connections, labels=None,
+                 INT_names=None, EXT_names=None, label_names=None, primer_names=None,
+                 setup=True, compile_eqns=True):
+        super(Learn, self).__init__(INT_connections, EXT_connections, labels=labels,
+                                  INT_names=INT_names, EXT_names=EXT_names, 
+                                  label_names=label_names, primer_names=primer_names,
+                                  setup=setup, compile_eqns=False)
+        self.obj = obj
+        self.fit_params = self.copies_rates_nMs[self.n_INTs:]
+        if compile_eqns:
+            self.compileEquations()
+            
+    
+    def compileEquations(self):
+        super(Learn, self).compileEquations()
+        #self._loss_full = jax.jit(self._loss_full)
+        self.loss = jax.jit(self.loss)
+        self.loss_full()
+        self.loss(self.copies_rates_nMs[self.n_INTs:],self.connections,self.labels)
+        
 
-        solutions = []
-        for i,INT_0 in iterator:
-            self.set_oligo_init(INT,10**INT_0)
-            self.updateParameters()
-            solutions.append(self.solveODE())
-            diffs[i] = self.get_diff()
-        self.diffs=diffs
-        return diffs, solutions
+    def _loss_full(self,params, obj, cycles, cm, labels, arrays, grids, pts, oligos):
+        oligos=np.array(oligos)
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+        
+        n_dims = n_o*2+n_p-len(params)
+        cut = n_o-n_dims
+        
+        
+        fixed_copies = 10**np.squeeze(np.reshape(np.tile(params[:cut],[2,1]),[cut*2,1],order='F'))
+        sweep_strands = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
+        fixed_strands = jax.ops.index_update(np.ones(n_s),sweep_strands,0)
+        strand_copies = jax.ops.index_update(fixed_strands,fixed_strands.astype(bool),fixed_copies)
+        
+        rates = params[cut:-n_p]
+        primer_copies = molar2copies(params[-n_p:]*1e-9)
+        copies = np.hstack([strand_copies,primer_copies])
+        pred = self.solution_sweep(copies, cycles, rates, cm, labels, arrays, grids, pts, oligos)
+        return np.sqrt(np.mean(np.square(obj-pred)))
+    
+    def loss_full(self, params=None, obj=None, cycles=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
+        
+        params = self.fit_params if params is None else params
+        
+        obj = self.obj if obj is None else obj
+        
+        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
+        
+        cm = self.connections if cm is None else cm
+        
+        labels = self.labels if labels is None else labels
+        
+        if None in [arrays, grids, pts, oligos]:
+            arrays, grids, pts, oligos = self.sweep_setup
+        
+        return self._loss_full(params, obj, cycles, cm, labels, arrays, grids, pts, oligos)
+    
+    
+    def loss(self, params, connections, labels):
+        return self._loss_full(params, self.obj, np.arange(self.cycles+1, dtype=float), connections, labels, *self.sweep_setup)
+        
 
-    # def INT_grid(self, INT1=None, INT2=None, progress_bar=True):
-    #     if INT1 is None: INT1=self.INTs[0]
-    #     if INT2 is None: INT2=self.INTs[1]
-    #     rng = self.INT_rng
-    #     res = self.INT_res
-    #     rng = np.arange(rng[0],rng[1]+res,res)
-    #     N = len(rng)
-    #     diffs = np.zeros([N,N])
-    #     iterator = tqdm(enumerate(rng),total=N) if progress_bar else enumerate(rng)
+    def fit(self, init_params=None, loss=None, method='L-BFGS-B', jac=True):
+        
+        init_params = self.fit_params if init_params is None else init_params
+        
+        _loss = self.loss if loss is None else loss
+        
+        loss = lambda params: _loss(params,self.connections,self.labels)
+        
+        jac = lambda x: onp.array(jax.grad(loss)(x)) if jac else None
+        
+        bounds = ([self.oligo_bounds for _ in range(self.n_EXTs)] +
+                  [self.rate_bounds for _ in range(self.n_oligos)] +
+                  [self.primer_bounds for _ in range(self.n_primers)])
+        
+        self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
+        return self.fit_result
+
+    # ################################################################################
+    # ## Solution plotting functions
+    # ################################################################################
+
+
+    # def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
+    #     if INT is None: INT=self.sweep_INT
+    #     if rng is None: rng=self.INT_rng
+    #     if res is None: res=self.INT_res
+    #     if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
+
+    #     N = len(pts)
+    #     diffs = np.zeros(N)
+    #     iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
+
+    #     solutions = []
     #     for i,INT_0 in iterator:
-    #         self.set_oligo_init(INT1,10**INT_0)
-    #         for j,INT_0 in enumerate(rng):
-    #             self.set_oligo_init(INT2,10**INT_0)
-    #             self.updateParameters()
-    #             self.solveODE()
-    #             diffs[i,j] = self.get_diff()
-    #     return diffs
-
+    #         self.set_oligo_init(INT,10**INT_0)
+    #         self.updateParameters()
+    #         solutions.append(self.solveODE())
+    #         diffs[i] = self.get_diff()
+    #     self.diffs=diffs
+    #     return diffs, solutions
+    
+    
     # def plot_INT_grid(self, ax=None, INT1=None, INT2=None, progress_bar=True, cmap = FAM_HEX_cmap()):
     #     if INT1 is None: INT1=self.INTs[0]
     #     if INT2 is None: INT2=self.INTs[1]
@@ -757,7 +892,7 @@ class CAN(PCR):
     #     rng = np.arange(rng[0],rng[1]+res,res)
     #     ext = np.ceil(np.max([np.max(diffs),np.abs(np.min(diffs))])*2)/2
     #     fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
-    #     pcm = ax.pcolormesh(rng,rng,diffs.T, cmap = cmap,
+    #     pcm = ax.pcolormesh(rng,rng,diffs, cmap = cmap,
     #                               vmin=-ext,vmax=ext,
     #                               shading = 'gouraud'
     #                         )
@@ -767,7 +902,7 @@ class CAN(PCR):
     #     cbar = plt.colorbar(pcm,ticks=np.arange(-ext,ext+0.5,0.5))#, ax = axs[1],extend=extend,ticks=np.arange(-10,10.1,2.5))
     #     #cbar_x0s.ax.set_ylabel('$log_{10}$ Tar/Ref Ratio\nProviding Signal Parity',fontsize=16)
     #     #cbar_x0s.ax.tick_params(labelsize=16)
-    #     cntr = ax.contour(rng,rng,diffs.T,colors = 'k',
+    #     cntr = ax.contour(rng,rng,diffs,colors = 'k',
     #                        #levels = np.arange(np.around(np.min(diffs)*2)/2,np.around(np.max(diffs)*2)/2+0.5,0.5)
     #                       )
     #     plt.clabel(cntr, inline=True, fontsize=16, fmt = '%.1f');
