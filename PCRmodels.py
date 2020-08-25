@@ -787,8 +787,35 @@ class CAN(PCR):
     ## Solution plotting functions
     ################################################################################
  
-    def plot_1D_solution(self, diffs=None, ax=None, crosshairs=[5,5], contour=True, cbar=True, pmesh_kws=None, contour_kws=None, cbar_kws=None):   
-        pass
+    def plot_1D_solution(self, diffs=None, ax=None, crosshairs=[5,5], plot_kws=None, scatter_kws=None):   
+
+        diffs = self.solution_sweep() if diffs is None else diffs
+        diffs = onp.array(diffs)
+        rng = self.sweep_rng
+        res = self.sweep_res
+        rng = np.arange(rng[0],rng[1]+res,res)
+        fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
+        
+        plot_defaults = {'color':grey(),'zorder':0}
+        plot_kws = {**plot_defaults,**plot_kws} if plot_kws is not None else plot_defaults
+        
+        ax.plot(rng,diffs, **plot_kws)
+
+        scatter_defaults = {'c':diffs,'cmap':FAM_HEX_cmap(),
+                          'vmin':-1,'vmax':1,
+                          's':10**2, 'edgecolor':grey(), 
+                          'zorder':1,
+                          }
+        scatter_kws = {**scatter_defaults,**scatter_kws} if scatter_kws is not None else scatter_defaults
+        
+        ax.scatter(rng,diffs, **scatter_kws)
+        
+        plt.setp(ax,**{
+            #'ylim' : [-1.05,1.05],
+            #'title' : '{:s}-{:s} after {:d} cycles'.format(self.labels[0],self.labels[1],self.cycles),
+            'ylabel' : 'Signal Difference',
+            'xlabel' : f'log10 '+ str(self.INTs[0]) +' copies',
+        })
  
     def plot_2D_solution(self, diffs=None, ax=None, crosshairs=[5,5], contour=True, cbar=True, pmesh_kws=None, contour_kws=None, cbar_kws=None):
         diffs = self.solution_sweep() if diffs is None else diffs
@@ -838,7 +865,7 @@ class CAN(PCR):
 
     def plot_objective(self, **kws):
         if self.n_INTs==1:
-            return self.plot_1D_solution(**kws)
+            return self.plot_1D_solution(diffs=self.obj, **kws)
         elif self.n_INTs==2:
             kws.setdefault('contour',False)
             return self.plot_2D_solution(diffs=self.obj, **kws)
@@ -862,6 +889,11 @@ class Learn(CAN):
                                   label_names=label_names, primer_names=primer_names,
                                   setup=setup, sweep_res=sweep_res, sweep_rng=sweep_rng,
                                   compile_eqns=False, disable_checks=disable_checks)
+        
+        if not disable_checks:
+            arrays, grids, pts, oligos = self.sweep_setup
+            assert obj.shape == grids[0].shape
+        
         self.obj = obj
         self.fit_params = self.copies_rates_nMs[self.n_INTs:]
         if compile_eqns:
@@ -933,28 +965,6 @@ class Learn(CAN):
         self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
         self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
         return self.fit_result
-
-
-
-    # def INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, pts=None):
-    #     if INT is None: INT=self.sweep_INT
-    #     if rng is None: rng=self.INT_rng
-    #     if res is None: res=self.INT_res
-    #     if pts is None: pts = np.arange(rng[0],rng[1]+res,res)
-
-    #     N = len(pts)
-    #     diffs = np.zeros(N)
-    #     iterator = tqdm(enumerate(pts),total=N) if progress_bar else enumerate(pts)
-
-    #     solutions = []
-    #     for i,INT_0 in iterator:
-    #         self.set_oligo_init(INT,10**INT_0)
-    #         self.updateParameters()
-    #         solutions.append(self.solveODE())
-    #         diffs[i] = self.get_diff()
-    #     self.diffs=diffs
-    #     return diffs, solutions
-    
     
    
     # def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
