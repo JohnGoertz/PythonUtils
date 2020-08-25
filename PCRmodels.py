@@ -61,7 +61,7 @@ def FAM_HEX_cmap(N = 64, sat = 'mid'):
 
     teals = mpl.cm.get_cmap('BrBG',N*2)(onp.linspace(0.5,0.8,N))
     oranges = mpl.cm.get_cmap('PuOr',N*2)(onp.linspace(0.2,0.5,N))
-    concat_colors = onp.vstack((oranges,teals))[::-1]
+    concat_colors = onp.vstack((oranges,teals))#[::-1]
     cmap = mpl.colors.ListedColormap(concat_colors, name='OrBG')
 
     return cmap
@@ -905,6 +905,24 @@ class Learn(CAN):
         self.loss = jax.jit(self.loss)
         self.loss(self.copies_rates_nMs[self.n_INTs:],self.connections,self.labels)
         
+    @staticmethod
+    def normalize(val, bound):
+        return (val-bound[0])/(bound[1]-bound[0])
+    
+    @staticmethod
+    def unnormalize(val, bound):
+        return val*(bound[1]-bound[0])+bound[0]
+    
+    def norm_params(self,params, n_i, n_o, n_p):
+        return np.hstack([self.normalize(params[:n_o-n_i],self.oligo_bounds),
+                          self.normalize(params[n_o-n_i:-n_p],self.rate_bounds),
+                          self.normalize(params[-n_p:],self.primer_bounds)])
+          
+    def unnorm_params(self,params, n_i, n_o, n_p):
+        return np.hstack([self.unnormalize(params[:n_o-n_i],self.oligo_bounds),
+                          self.unnormalize(params[n_o-n_i:-n_p],self.rate_bounds),
+                          self.unnormalize(params[-n_p:],self.primer_bounds)])
+        
 
     def _loss_full(self,params, obj, cycles, cm, labels, arrays, grids, pts, oligos):
         oligos=np.array(oligos)
@@ -914,16 +932,18 @@ class Learn(CAN):
         n_dims = n_o*2+n_p-len(params)
         cut = n_o-n_dims
         
+        oligo_copies = self.unnormalize(params[:cut],self.oligo_bounds)
+        oligo_rates = self.unnormalize(params[cut:-n_p],self.rate_bounds)
+        primer_nMs = self.unnormalize(params[-n_p:],self.primer_bounds)
         
-        fixed_copies = 10**np.squeeze(np.reshape(np.tile(params[:cut],[2,1]),[cut*2,1],order='F'))
+        fixed_copies = 10**np.squeeze(np.reshape(np.tile(oligo_copies,[2,1]),[cut*2,1],order='F'))
         sweep_strands = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
         fixed_strands = jax.ops.index_update(np.ones(n_s),sweep_strands,0)
         strand_copies = jax.ops.index_update(fixed_strands,fixed_strands.astype(bool),fixed_copies)
         
-        rates = params[cut:-n_p]
-        primer_copies = molar2copies(params[-n_p:]*1e-9)
+        primer_copies = molar2copies(primer_nMs*1e-9)
         copies = np.hstack([strand_copies,primer_copies])
-        pred = self.solution_sweep(copies, cycles, rates, cm, labels, arrays, grids, pts, oligos)
+        pred = self.solution_sweep(copies, cycles, oligo_rates, cm, labels, arrays, grids, pts, oligos)
         return np.sqrt(np.mean(np.square(obj-pred)))
     
     def loss_full(self, params=None, obj=None, cycles=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
@@ -951,6 +971,7 @@ class Learn(CAN):
     def fit(self, init_params=None, loss=None, method='L-BFGS-B', jac=True):
         
         init_params = self.fit_params if init_params is None else init_params
+        init_params = self.norm_params(init_params, self.n_INTs, self.n_oligos, self.n_primers)
         
         _loss = self.loss if loss is None else loss
         
@@ -958,11 +979,10 @@ class Learn(CAN):
         
         jac = lambda x: onp.array(jax.grad(loss)(x)) if jac else None
         
-        bounds = ([self.oligo_bounds for _ in range(self.n_EXTs)] +
-                  [self.rate_bounds for _ in range(self.n_oligos)] +
-                  [self.primer_bounds for _ in range(self.n_primers)])
+        bounds = [(0,1) for _ in range(self.n_EXTs+self.n_oligos+self.n_primers)]  
         
         self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
+        self.fit_result.x = self.unnorm_params(self.fit_result.x, self.n_INTs, self.n_oligos, self.n_primers)
         self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
         return self.fit_result
     
