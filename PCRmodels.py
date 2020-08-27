@@ -243,9 +243,9 @@ class PCR:
             assert all(np.sum(connections==+1, axis=1) == 1), 'All rows of connections must have exactly one +1 and one -1 value'
             assert all(np.sum(connections!=0, axis=1) == 2), 'All rows of connections must have exactly two non-zero values'
         
-        self.connections = np.array(connections,dtype=float)
-        self.s_cm = self._make_s_cm(self.connections)
-        self.p_cm = self._make_p_cm(self.connections)
+        self.cm = self.connections = np.array(connections,dtype=float)
+        self.s_cm = self._make_s_cm(self.cm)
+        self.p_cm = self._make_p_cm(self.cm)
         
         self.n_oligos, self.n_primers = connections.shape
         self.n_strands = self.n_oligos*2
@@ -386,6 +386,75 @@ class PCR:
         p_cm = self.p_cm if p_cm is None else p_cm
         
         return self._solve(copies, cycles, strand_rates, s_cm, p_cm)
+    
+    @staticmethod
+    def _plot_connections(rxn_tpl, ax=None):
+        cm,labels = rxn_tpl
+        n_o,n_p = cm.shape
+        p_cm = onp.array(np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_o*2,n_p]))
+        l1 = p_cm*labels[0,:][:,None]
+        l1 = np.add(*np.split(np.reshape(l1,[n_o,n_p*2]),2,axis=1))
+        l2 = p_cm*labels[1,:][:,None]
+        l2 = np.add(*np.split(np.reshape(l2,[n_o,n_p*2]),2,axis=1))
+    
+        if ax is None:
+            fig,ax = plt.subplots(1,1)
+        
+        ax.imshow(np.abs(cm),cmap='binary')
+        ax.imshow(l1-l2, alpha = np.abs(l1-l2), cmap=FAM_HEX_cmap())
+        ax.set_xticks([])
+        ax.set_yticks([])
+        
+    def plot_connections(self, ax=None):
+        rxn_tpl = self.cm, self.labels
+        self._plot_connections(rxn_tpl,ax)
+        
+
+    @staticmethod
+    def _simplifyRxn(rxn_tpl, n_NAT=1):
+        cm,labels = rxn_tpl
+        
+        # Remove double-labeled strands
+        labels *= ~(labels.sum(axis=0)==2)
+        labels = labels.T
+        
+        n_o,n_p = cm.shape
+        n_y = n_o-n_NAT
+        n_s = n_o*2
+        
+        SYNs = cm[n_NAT:,:]
+        p_cm = onp.array(np.reshape(np.abs(np.hstack([SYNs-1,SYNs+1]))//2,[n_y*2,n_p]))
+        SYN_labels = onp.array(labels[n_NAT*2:,:])
+        
+        # Primer utilized by each strand
+        primers = np.argwhere(p_cm)[:,1]
+        
+        # Ensure the -1 strand is on the left
+        for y in range(n_y):
+            old_order = [2*y,2*y+1]
+            pair = primers[old_order]==np.min(primers[old_order])
+            new_order = (~pair).astype(int)+2*y
+            p_cm[old_order,:] = p_cm[new_order,:]
+            SYN_labels[old_order,:] = SYN_labels[new_order,:]
+        
+        SYN_cm = np.subtract(*np.split(np.reshape(p_cm,[n_y,n_p*2]),2,axis=1)[::-1])
+        
+        # Ensure oligos are ordered by position of -1 strand
+        primers = np.reshape(np.argwhere(SYN_cm)[:,1],[-1,2])
+        first = primers[:,1].argsort(axis=0)
+        second = primers[first][:,0].argsort(axis=0)
+        primers = primers[first][second]
+        SYN_cm = SYN_cm[first][second]
+        SYN_labels = np.reshape(np.reshape(SYN_labels,[-1,4])[first,:][second,:],[-1,2])
+        
+        cm = np.vstack([cm[:n_NAT,:],SYN_cm])
+        labels = np.vstack([labels[:n_NAT*2,:],SYN_labels])
+        
+        return cm,labels.T
+    
+    def simplifyRxn(self):
+        rxn_tpl = self.cm, self.labels
+        return self._simplifyRxn(rxn_tpl,0)
 
 
     ################################################################################
@@ -791,15 +860,15 @@ class CAN(PCR):
 
         diffs = self.solution_sweep() if diffs is None else diffs
         diffs = onp.array(diffs)
-        rng = self.sweep_rng
-        res = self.sweep_res
-        rng = np.arange(rng[0],rng[1]+res,res)
+        x = np.squeeze(self.sweep_setup[2])
+        
         fig,ax = plt.subplots(1,1) if ax is None else (ax.figure,ax)
         
         plot_defaults = {'color':grey(),'zorder':0}
         plot_kws = {**plot_defaults,**plot_kws} if plot_kws is not None else plot_defaults
         
-        ax.plot(rng,diffs, **plot_kws)
+        
+        ax.plot(x,diffs, **plot_kws)
 
         scatter_defaults = {'c':diffs,'cmap':FAM_HEX_cmap(),
                           'vmin':-1,'vmax':1,
@@ -808,7 +877,7 @@ class CAN(PCR):
                           }
         scatter_kws = {**scatter_defaults,**scatter_kws} if scatter_kws is not None else scatter_defaults
         
-        ax.scatter(rng,diffs, **scatter_kws)
+        ax.scatter(x,diffs, **scatter_kws)
         
         plt.setp(ax,**{
             #'ylim' : [-1.05,1.05],
@@ -870,6 +939,11 @@ class CAN(PCR):
             kws.setdefault('contour',False)
             return self.plot_2D_solution(diffs=self.obj, **kws)
         
+    
+    def simplifyRxn(self):
+        rxn_tpl = self.cm, self.labels
+        return self._simplifyRxn(rxn_tpl,self.n_INTs)
+    
     
     
 class Learn(CAN):
