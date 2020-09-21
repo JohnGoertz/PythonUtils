@@ -400,7 +400,7 @@ class PCR:
         if ax is None:
             fig,ax = plt.subplots(1,1)
         
-        ax.imshow(np.abs(cm),cmap='binary')
+        ax.imshow(np.abs(cm),cmap='binary',vmin=0,vmax=1)
         ax.imshow(l1-l2, alpha = np.abs(l1-l2), cmap=FAM_HEX_cmap())
         ax.set_xticks([])
         ax.set_yticks([])
@@ -699,7 +699,7 @@ class CAN(PCR):
                    }
         m = max(map(len, list(summary.keys()))) + 1
         return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
-                  for k, v in sorted(summary.items())])
+                  for k, v in summary.items()])
         
     
     ################################################################################
