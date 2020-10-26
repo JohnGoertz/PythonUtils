@@ -624,6 +624,7 @@ class PCR:
         return [calc_rho(oligo.rate,oligo.copies,self.norm.copies)
                 for oligo in self.oligos]
 
+    
 
 class CAN(PCR):
     
@@ -663,6 +664,8 @@ class CAN(PCR):
         self.EXT_cm = EXT_connections
         self.n_INTs, self.n_primers = self.INT_cm.shape
         self.n_EXTs, _ = self.EXT_cm.shape
+        self.INT_names = INT_names
+        self.EXT_names = EXT_names
         
         if INT_names  is None:
             INT_names = [chr(ord('α')+i) for i in range(self.n_INTs)]
@@ -756,9 +759,7 @@ class CAN(PCR):
         signals = np.dot(labels,strands)
         return -np.diff(signals)
     
-    def get_diffs(self,pt=None,rhs=None,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None,update_idx=None,norm=None,labels=None):
-        if rhs==None:
-            rhs=self.rhs
+    def get_diffs(self,pt=None,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None,update_idx=None,norm=None,labels=None):
         if copies==None:
             copies=self.copies
         if cycles==None:
@@ -775,7 +776,7 @@ class CAN(PCR):
             norm=self.norm
         if labels==None:
             labels=self.labels
-        return self._get_diffs(pt,rhs,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels)
+        return self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels)
             
 
     
@@ -944,7 +945,32 @@ class CAN(PCR):
         rxn_tpl = self.cm, self.labels
         return self._simplifyRxn(rxn_tpl,self.n_INTs)
     
+    def BDA(self, yields=None, disable_checks=False):
+        return BDA(self, yields=yields, disable_checks=disable_checks)
     
+    
+    
+class BDA(CAN):
+    
+    
+    def __init__(self, CAN, yields=None, disable_checks=False):
+        
+        super(BDA, self).__init__(CAN.INT_cm, CAN.EXT_cm, labels=CAN.labels,
+                                  INT_names=CAN.INT_names, EXT_names=CAN.EXT_names,
+                                  label_names=CAN.label_names, primer_names=CAN.primer_names, 
+                                  compile_eqns=False, disable_checks=disable_checks)
+        
+        self.CAN = CAN
+        
+        if (not disable_checks) & (yields is not None):
+            assert yields.shape == (self.n_strands,), 'Yields must be a 1D vector of length n_strands'
+            
+        self.yields = np.ones(self.n_strands) if yields is None else yields
+        
+          
+    @property
+    def strand_rates(self):
+        return self.yields[:,None]*self.CAN.strand_rates
     
 class Learn(CAN):
     
