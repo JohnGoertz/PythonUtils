@@ -785,8 +785,9 @@ class CAN(PCR):
             labels=self.labels
         return self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels)
             
+
     
-    def _solution_sweep(self, copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos):
+    def _solution_sweep(self, copies, cycles, rates, cm, labels, arrays, grids, pts, oligos):
         norm = molar2copies(100*1e-9)
         oligos = np.array(oligos)
         n_o, n_p = cm.shape
@@ -796,6 +797,8 @@ class CAN(PCR):
         s_cm = np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
         # primer that binds to each strand
         p_cm = np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
+        # reshape connection matrix and rates to correspond to each strand instead of each oligo
+        strand_rates = np.reshape(np.tile(rates,[2,1]),[n_s,1],order='F')
         
         update_idx = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
         
@@ -809,7 +812,7 @@ class CAN(PCR):
         self.solution = diffs
         return diffs
     
-    def solution_sweep(self, copies=None, cycles=None, strand_rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
+    def solution_sweep(self, copies=None, cycles=None, rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
         '''
         Calculates solutions for a range of oligo concentrations
         
@@ -838,7 +841,7 @@ class CAN(PCR):
         
         cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
         
-        strand_rates = self.strand_rates if strand_rates is None else strand_rates
+        rates = self.rates if rates is None else rates
         
         cm = self.connections if cm is None else cm
         
@@ -847,7 +850,7 @@ class CAN(PCR):
         if None in [arrays, grids, pts, oligos]:
             arrays, grids, pts, oligos = self.sweep_setup
             
-        return self._solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
+        return self._solution_sweep(copies, cycles, rates, cm, labels, arrays, grids, pts, oligos)
     
     
     
@@ -967,9 +970,9 @@ class BDA():
         
         self.CAN = CAN_
         
-        # setattr(self,'n_strands',getattr(self.CAN,'n_strands'))
+        setattr(self,'n_strands',getattr(self.CAN,'n_strands'))
         
-        # setattr(self,'plot_1D_solution',getattr(self.CAN,'plot_1D_solution'))
+        setattr(self,'plot_1D_solution',getattr(self.CAN,'plot_1D_solution'))
         
         
         if (not disable_checks) & (yields is not None):
@@ -978,64 +981,34 @@ class BDA():
         self.yields = np.ones(self.n_strands) if yields is None else yields
         
         # Wrap the methods and properties of the underlying CAN
-        # dont_copy = ['BDA',*dir(BDA)]
-        # for attr in dir(CAN):
-        #     if attr not in dont_copy:
-        #         if isinstance(getattr(CAN,attr),property):
-        #             print(attr)
-        #             setattr(self,attr,self.pass_property(attr))
-        #         else:
-        #             setattr(self,attr,getattr(self.CAN,attr))
+        dont_copy = ['BDA',*dir(BDA)]
+        for attr in dir(CAN_):
+            if attr not in dont_copy:
+                setattr(self,attr,getattr(self.CAN,attr))
         
-        # if compile_eqns:
-        #     self.compileEquations()
+        if compile_eqns:
+            self.compileEquations()
             
-    def __getattr__(self,name):
-        if name not in ['CAN',*dir(BDA)]:
-            return getattr(self.CAN,name)
-        else:
-            return super().__getattr__(self,name)
     
-    def __setattr__(self,name,value):
-        if name not in ['CAN',*dir(BDA)]:
-            setattr(self.CAN,name,value)
-        else:
-            super().__setattr__(name,value)
-    
-    
-    
-    # def __str__(self):
-    #     summary = {'Connections':self.connections,
-    #                'Labels':self.labels,
-    #                'Oligos (log copies)': onp.log10(self.oligo_copies),
-    #                'Rates (base 2)':self.rates,
-    #                'Primers (nM)':self.primer_nMs,
-    #                'Strand Yields':self.yields,
-    #                }
-    #     m = max(map(len, list(summary.keys()))) + 1
-    #     return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
-    #               for k, v in sorted(summary.items())])
+    def __str__(self):
+        summary = {'Connections':self.connections,
+                   'Labels':self.labels,
+                   'Oligos (log copies)': onp.log10(self.oligo_copies),
+                   'Rates (base 2)':self.rates,
+                   'Primers (nM)':self.primer_nMs,
+                   'Strand Yields':self.yields,
+                   }
+        m = max(map(len, list(summary.keys()))) + 1
+        return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
+                  for k, v in sorted(summary.items())])
 
-    # def __repr__(self):
-    #     return self.__str__()
+    def __repr__(self):
+        return self.__str__()
         
           
     @property
     def strand_rates(self):
         return self.yields[:,None]*self.CAN.strand_rates
-    
-    def pass_property(self,name):
-
-        @property
-        def prop(self):
-            return getattr(self.CAN, name)
-    
-        @prop.setter
-        def prop(self, value):
-            setattr(self.CAN, name, value)
-    
-        return prop
-    
     
     def solve(self,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None):
         
@@ -1050,27 +1023,6 @@ class BDA():
         p_cm = self.p_cm if p_cm is None else p_cm
         
         return self._solve(copies, cycles, strand_rates, s_cm, p_cm)
-    
-    
-    def solution_sweep(self, copies=None, cycles=None, strand_rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
-        
-        copies = self.copies if copies is None else copies
-        
-        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
-        
-        strand_rates = self.strand_rates if strand_rates is None else strand_rates
-        
-        cm = self.connections if cm is None else cm
-        
-        labels = self.labels if labels is None else labels
-        
-        if None in [arrays, grids, pts, oligos]:
-            arrays, grids, pts, oligos = self.sweep_setup
-            
-        return self._solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
-    
-    
-    
     
 class Learn(CAN):
     
