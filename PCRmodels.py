@@ -211,15 +211,8 @@ class PCR:
         'cycles' : 60.,
         'solution' : None,
     }
-    
-    # def __copy__(self, compile_eqns=True, disable_checks=False):
-    #     return PCR(self.connections, self.labels, 
-    #                self.oligo_names, self.label_names, self.primer_names,
-    #                compile_eqns, disable_checks)
 
-    def __init__(self, connections, labels=None,
-                 oligo_names=None, label_names=None, primer_names=None,
-                 compile_eqns=True, disable_checks=False):
+    def __init__(self, connections, labels=None, oligo_names=None, label_names=None, primer_names=None, compile_eqns=True, disable_checks=False):
         """
         Constructs a Monod simulation of a PCR reaction system.
         
@@ -957,72 +950,27 @@ class CAN(PCR):
     
     
     
-class BDA():
+class BDA(CAN):
     
     
-    def __init__(self, CAN_, yields=None, disable_checks=False, compile_eqns=True):
+    def __init__(self, CAN, yields=None, disable_checks=False):
         
-        # super(BDA, self).__init__(CAN_.INT_cm, CAN_.EXT_cm, labels=CAN_.labels,
-        #                           INT_names=CAN_.INT_names, EXT_names=CAN_.EXT_names,
-        #                           label_names=CAN_.label_names, primer_names=CAN_.primer_names, 
-        #                           compile_eqns=False, disable_checks=disable_checks)
+        super(BDA, self).__init__(CAN.INT_cm, CAN.EXT_cm, labels=CAN.labels,
+                                  INT_names=CAN.INT_names, EXT_names=CAN.EXT_names,
+                                  label_names=CAN.label_names, primer_names=CAN.primer_names, 
+                                  compile_eqns=False, disable_checks=disable_checks)
         
-        
-        self.CAN = CAN_
-        
-        setattr(self,'n_strands',getattr(self.CAN,'n_strands'))
-        
-        setattr(self,'plot_1D_solution',getattr(self.CAN,'plot_1D_solution'))
-        
+        self.CAN = CAN
         
         if (not disable_checks) & (yields is not None):
             assert yields.shape == (self.n_strands,), 'Yields must be a 1D vector of length n_strands'
             
         self.yields = np.ones(self.n_strands) if yields is None else yields
         
-        # Wrap the methods and properties of the underlying CAN
-        dont_copy = ['BDA',*dir(BDA)]
-        for attr in dir(CAN_):
-            if attr not in dont_copy:
-                setattr(self,attr,getattr(self.CAN,attr))
-        
-        if compile_eqns:
-            self.compileEquations()
-            
-    
-    def __str__(self):
-        summary = {'Connections':self.connections,
-                   'Labels':self.labels,
-                   'Oligos (log copies)': onp.log10(self.oligo_copies),
-                   'Rates (base 2)':self.rates,
-                   'Primers (nM)':self.primer_nMs,
-                   'Strand Yields':self.yields,
-                   }
-        m = max(map(len, list(summary.keys()))) + 1
-        return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
-                  for k, v in sorted(summary.items())])
-
-    def __repr__(self):
-        return self.__str__()
-        
           
     @property
     def strand_rates(self):
         return self.yields[:,None]*self.CAN.strand_rates
-    
-    def solve(self,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None):
-        
-        copies = self.copies if copies is None else copies
-        
-        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
-        
-        strand_rates = self.strand_rates if strand_rates is None else strand_rates
-        
-        s_cm = self.s_cm if s_cm is None else s_cm
-        
-        p_cm = self.p_cm if p_cm is None else p_cm
-        
-        return self._solve(copies, cycles, strand_rates, s_cm, p_cm)
     
 class Learn(CAN):
     
@@ -1032,12 +980,14 @@ class Learn(CAN):
         'primer_bounds': (10.,500.),
         }}
 
-    def __init__(self, CAN_, obj, setup=True, disable_checks=False, compile_eqns=True):
-        
-        super(Learn, self).__init__(CAN_.INT_cm, CAN_.EXT_cm, labels=CAN_.labels,
-                                  INT_names=CAN_.INT_names, EXT_names=CAN_.EXT_names,
-                                  label_names=CAN_.label_names, primer_names=CAN_.primer_names, 
-                                  setup=setup, sweep_res=CAN_.sweep_res, sweep_rng=CAN_.sweep_rng,
+    def __init__(self, obj, INT_connections, EXT_connections, labels=None,
+                 INT_names=None, EXT_names=None, label_names=None, primer_names=None,
+                 setup=True, sweep_res=1., sweep_rng=[1.,9.],
+                 compile_eqns=True, disable_checks=False):
+        super(Learn, self).__init__(INT_connections, EXT_connections, labels=labels,
+                                  INT_names=INT_names, EXT_names=EXT_names, 
+                                  label_names=label_names, primer_names=primer_names,
+                                  setup=setup, sweep_res=sweep_res, sweep_rng=sweep_rng,
                                   compile_eqns=False, disable_checks=disable_checks)
         
         if not disable_checks:
