@@ -780,7 +780,7 @@ class CAN(PCR):
             
 
     
-    def _solution_sweep(self, copies, cycles, rates, cm, labels, arrays, grids, pts, oligos):
+    def _solution_sweep(self, copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos):
         norm = molar2copies(100*1e-9)
         oligos = np.array(oligos)
         n_o, n_p = cm.shape
@@ -790,8 +790,6 @@ class CAN(PCR):
         s_cm = np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
         # primer that binds to each strand
         p_cm = np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
-        # reshape connection matrix and rates to correspond to each strand instead of each oligo
-        strand_rates = np.reshape(np.tile(rates,[2,1]),[n_s,1],order='F')
         
         update_idx = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
         
@@ -805,7 +803,7 @@ class CAN(PCR):
         self.solution = diffs
         return diffs
     
-    def solution_sweep(self, copies=None, cycles=None, rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
+    def solution_sweep(self, copies=None, cycles=None, strand_rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
         '''
         Calculates solutions for a range of oligo concentrations
         
@@ -834,7 +832,7 @@ class CAN(PCR):
         
         cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
         
-        rates = self.rates if rates is None else rates
+        strand_rates = self.strand_rates if strand_rates is None else strand_rates
         
         cm = self.connections if cm is None else cm
         
@@ -843,7 +841,7 @@ class CAN(PCR):
         if None in [arrays, grids, pts, oligos]:
             arrays, grids, pts, oligos = self.sweep_setup
             
-        return self._solution_sweep(copies, cycles, rates, cm, labels, arrays, grids, pts, oligos)
+        return self._solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
     
     
     
@@ -953,24 +951,45 @@ class CAN(PCR):
 class BDA(CAN):
     
     
-    def __init__(self, CAN, yields=None, disable_checks=False):
+    def __init__(self, INT_connections, EXT_connections, labels=None, yields=None, 
+                 INT_names=None, EXT_names=None, label_names=None, primer_names=None,
+                 setup=True, sweep_res=1., sweep_rng=[1.,9.],
+                 compile_eqns=True, disable_checks=False):
         
-        super(BDA, self).__init__(CAN.INT_cm, CAN.EXT_cm, labels=CAN.labels,
-                                  INT_names=CAN.INT_names, EXT_names=CAN.EXT_names,
-                                  label_names=CAN.label_names, primer_names=CAN.primer_names, 
+        super(BDA, self).__init__(INT_connections, EXT_connections, labels=labels,
+                                  INT_names=INT_names, EXT_names=EXT_names, 
+                                  label_names=label_names, primer_names=primer_names,
+                                  setup=setup, sweep_res=sweep_res, sweep_rng=sweep_rng,
                                   compile_eqns=False, disable_checks=disable_checks)
         
-        self.CAN = CAN
         
         if (not disable_checks) & (yields is not None):
             assert yields.shape == (self.n_strands,), 'Yields must be a 1D vector of length n_strands'
             
         self.yields = np.ones(self.n_strands) if yields is None else yields
         
+        
+        if compile_eqns:
+            self.compileEquations()
+        
           
+    def __str__(self):
+        summary = {'Connections':self.connections,
+                   'Labels':self.labels,
+                   'Oligos (log copies)': onp.log10(self.oligo_copies),
+                   'Rates (base 2)':self.rates,
+                   'Primers (nM)':self.primer_nMs,
+                   'Strand Yields':self.yields,
+                   }
+        m = max(map(len, list(summary.keys()))) + 1
+        return '\n'.join([k.rjust(m) + ': ' + onp.array2string(onp.array(v),prefix=(k.rjust(m)+': '))
+                  for k, v in sorted(summary.items())])    
+    
     @property
     def strand_rates(self):
-        return self.yields[:,None]*self.CAN.strand_rates
+        return self.yields[:,None]*np.reshape(np.tile(self.rates,[2,1]),[self.n_strands,1],order='F')
+    
+    
     
 class Learn(CAN):
     
