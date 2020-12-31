@@ -623,14 +623,18 @@ class PCR:
         '''
         return [calc_rho(oligo.rate,oligo.copies,self.norm.copies)
                 for oligo in self.oligos]
-
     
-
+    
 class CAN(PCR):
     
     defaults = {**PCR.defaults,**{
         'sweep_res' : 1.,
-        'sweep_rng' : [1.,9.],
+        'sweep_rng' : [0.5,9.5],
+        # Learning defaults
+        'obj' : None,
+        'oligo_bounds': (1.,10.),
+        'rate_bounds': (0.5,1.),
+        'primer_bounds': (10.,500.),
         }}
     
     def __init__(self, INT_connections, EXT_connections, labels=None,
@@ -754,6 +758,7 @@ class CAN(PCR):
         # Set the oligo concentrations accordingly
         update_vals = np.squeeze(np.reshape(10**np.vstack([pt,pt]),[2*len(pt),1],order='F'))
         copies = jax.ops.index_update(copies,update_idx,update_vals, indices_are_sorted=True, unique_indices=True)
+        
         solution = self._solve(copies,cycles,strand_rates,s_cm,p_cm)[-1,:]
         strands = solution[:n_s]/norm
         signals = np.dot(labels,strands)
@@ -849,6 +854,7 @@ class CAN(PCR):
         super(CAN, self).compileEquations()
         self._solution_sweep = jax.jit(self._solution_sweep)
         self.solution_sweep()
+        #if self.obj is not None: self.compileLoss()
         
         
     ################################################################################
@@ -947,6 +953,116 @@ class CAN(PCR):
         return BDA(self, yields=yields, disable_checks=disable_checks)
     
     
+
+    ##########################################################################
+    ## Learning Methods
+    ##########################################################################
+    def Learn(self, obj, disable_checks=False, compile_eqns=True):
+        
+        if not disable_checks:
+            arrays, grids, pts, oligos = self.sweep_setup
+            assert obj.shape == grids[0].shape
+        
+        self.obj = obj
+        self.fit_params = self.copies_rates_nMs[self.n_INTs:]
+        
+        if compile_eqns: self.compileEquations()
+        
+        return self
+        
+    def compileLoss(self):
+        if self.obj is None: pass
+        self.loss = jax.jit(self.loss)
+        self.loss(self.fit_params,self.connections,self.labels)
+        
+    @staticmethod
+    def normalize(val, bound):
+        return (val-bound[0])/(bound[1]-bound[0])
+    
+    @staticmethod
+    def unnormalize(val, bound):
+        return val*(bound[1]-bound[0])+bound[0]
+    
+    def norm_params(self,params, n_i, n_o, n_p):
+        if self.obj is None: pass
+        return np.hstack([self.normalize(params[:n_o-n_i],self.oligo_bounds),
+                          self.normalize(params[n_o-n_i:-n_p],self.rate_bounds),
+                          self.normalize(params[-n_p:],self.primer_bounds)])
+          
+    def unnorm_params(self,params, n_i, n_o, n_p):
+        if self.obj is None: pass
+        return np.hstack([self.unnormalize(params[:n_o-n_i],self.oligo_bounds),
+                          self.unnormalize(params[n_o-n_i:-n_p],self.rate_bounds),
+                          self.unnormalize(params[-n_p:],self.primer_bounds)])
+        
+
+    def _loss_full(self,params, obj, cycles, cm, labels, arrays, grids, pts, oligos):
+        oligos=np.array(oligos)
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+        
+        n_dims = n_o*2+n_p-len(params)
+        cut = n_o-n_dims
+        
+        oligo_copies = self.unnormalize(params[:cut],self.oligo_bounds)
+        oligo_rates = self.unnormalize(params[cut:-n_p],self.rate_bounds)
+        strand_rates = np.reshape(np.tile(oligo_rates,[2,1]),[self.n_strands,1],order='F')
+        primer_nMs = self.unnormalize(params[-n_p:],self.primer_bounds)
+        
+        fixed_copies = 10**np.squeeze(np.reshape(np.tile(oligo_copies,[2,1]),[cut*2,1],order='F'))
+        sweep_strands = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
+        fixed_strands = jax.ops.index_update(np.ones(n_s),sweep_strands,0)
+        strand_copies = jax.ops.index_update(fixed_strands,fixed_strands.astype(bool),fixed_copies)
+        
+        primer_copies = molar2copies(primer_nMs*1e-9)
+        copies = np.hstack([strand_copies,primer_copies])
+        pred = self.solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
+        return np.sqrt(np.mean(np.square(obj-pred)))
+    
+    def loss_full(self, params=None, obj=None, cycles=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
+        
+        if self.obj is None: pass
+    
+        params = self.fit_params if params is None else params
+        
+        obj = self.obj if obj is None else obj
+        
+        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
+        
+        cm = self.connections if cm is None else cm
+        
+        labels = self.labels if labels is None else labels
+        
+        if None in [arrays, grids, pts, oligos]:
+            arrays, grids, pts, oligos = self.sweep_setup
+        
+        return self._loss_full(params, obj, cycles, cm, labels, arrays, grids, pts, oligos)
+    
+    
+    def loss(self, params, connections, labels):
+        if self.obj is None: pass
+        return self._loss_full(params, self.obj, np.arange(self.cycles+1, dtype=float), connections, labels, *self.sweep_setup)
+        
+
+    def fit(self, init_params=None, loss=None, method='L-BFGS-B', jac=True):
+        if self.obj is None: pass
+        
+        init_params = self.fit_params if init_params is None else init_params
+        init_params = self.norm_params(init_params, self.n_INTs, self.n_oligos, self.n_primers)
+        
+        _loss = self.loss if loss is None else loss
+        
+        loss = lambda params: _loss(params,self.connections,self.labels)
+        
+        jac = lambda x: onp.array(jax.grad(loss)(x)) if jac else None
+        
+        bounds = [(0,1) for _ in range(self.n_EXTs+self.n_oligos+self.n_primers)]  
+        
+        self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
+        self.fit_result.x = self.unnorm_params(self.fit_result.x, self.n_INTs, self.n_oligos, self.n_primers)
+        self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
+        return self.fit_result
+
     
 class BDA(CAN):
     
@@ -990,120 +1106,6 @@ class BDA(CAN):
         return self.yields[:,None]*np.reshape(np.tile(self.rates,[2,1]),[self.n_strands,1],order='F')
     
     
-    
-class Learn(CAN):
-    
-    defaults = {**PCR.defaults,**{
-        'oligo_bounds': (1.,10.),
-        'rate_bounds': (0.5,1.),
-        'primer_bounds': (10.,500.),
-        }}
-
-    def __init__(self, obj, INT_connections, EXT_connections, labels=None,
-                 INT_names=None, EXT_names=None, label_names=None, primer_names=None,
-                 setup=True, sweep_res=1., sweep_rng=[1.,9.],
-                 compile_eqns=True, disable_checks=False):
-        super(Learn, self).__init__(INT_connections, EXT_connections, labels=labels,
-                                  INT_names=INT_names, EXT_names=EXT_names, 
-                                  label_names=label_names, primer_names=primer_names,
-                                  setup=setup, sweep_res=sweep_res, sweep_rng=sweep_rng,
-                                  compile_eqns=False, disable_checks=disable_checks)
-        
-        if not disable_checks:
-            arrays, grids, pts, oligos = self.sweep_setup
-            assert obj.shape == grids[0].shape
-        
-        self.obj = obj
-        self.fit_params = self.copies_rates_nMs[self.n_INTs:]
-        if compile_eqns:
-            self.compileEquations()
-            
-    
-    def compileEquations(self):
-        super(Learn, self).compileEquations()
-        self.loss = jax.jit(self.loss)
-        self.loss(self.copies_rates_nMs[self.n_INTs:],self.connections,self.labels)
-        
-    @staticmethod
-    def normalize(val, bound):
-        return (val-bound[0])/(bound[1]-bound[0])
-    
-    @staticmethod
-    def unnormalize(val, bound):
-        return val*(bound[1]-bound[0])+bound[0]
-    
-    def norm_params(self,params, n_i, n_o, n_p):
-        return np.hstack([self.normalize(params[:n_o-n_i],self.oligo_bounds),
-                          self.normalize(params[n_o-n_i:-n_p],self.rate_bounds),
-                          self.normalize(params[-n_p:],self.primer_bounds)])
-          
-    def unnorm_params(self,params, n_i, n_o, n_p):
-        return np.hstack([self.unnormalize(params[:n_o-n_i],self.oligo_bounds),
-                          self.unnormalize(params[n_o-n_i:-n_p],self.rate_bounds),
-                          self.unnormalize(params[-n_p:],self.primer_bounds)])
-        
-
-    def _loss_full(self,params, obj, cycles, cm, labels, arrays, grids, pts, oligos):
-        oligos=np.array(oligos)
-        n_o, n_p = cm.shape
-        n_s = n_o*2
-        
-        n_dims = n_o*2+n_p-len(params)
-        cut = n_o-n_dims
-        
-        oligo_copies = self.unnormalize(params[:cut],self.oligo_bounds)
-        oligo_rates = self.unnormalize(params[cut:-n_p],self.rate_bounds)
-        primer_nMs = self.unnormalize(params[-n_p:],self.primer_bounds)
-        
-        fixed_copies = 10**np.squeeze(np.reshape(np.tile(oligo_copies,[2,1]),[cut*2,1],order='F'))
-        sweep_strands = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
-        fixed_strands = jax.ops.index_update(np.ones(n_s),sweep_strands,0)
-        strand_copies = jax.ops.index_update(fixed_strands,fixed_strands.astype(bool),fixed_copies)
-        
-        primer_copies = molar2copies(primer_nMs*1e-9)
-        copies = np.hstack([strand_copies,primer_copies])
-        pred = self.solution_sweep(copies, cycles, oligo_rates, cm, labels, arrays, grids, pts, oligos)
-        return np.sqrt(np.mean(np.square(obj-pred)))
-    
-    def loss_full(self, params=None, obj=None, cycles=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
-        
-        params = self.fit_params if params is None else params
-        
-        obj = self.obj if obj is None else obj
-        
-        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
-        
-        cm = self.connections if cm is None else cm
-        
-        labels = self.labels if labels is None else labels
-        
-        if None in [arrays, grids, pts, oligos]:
-            arrays, grids, pts, oligos = self.sweep_setup
-        
-        return self._loss_full(params, obj, cycles, cm, labels, arrays, grids, pts, oligos)
-    
-    
-    def loss(self, params, connections, labels):
-        return self._loss_full(params, self.obj, np.arange(self.cycles+1, dtype=float), connections, labels, *self.sweep_setup)
-        
-
-    def fit(self, init_params=None, loss=None, method='L-BFGS-B', jac=True):
-        
-        init_params = self.fit_params if init_params is None else init_params
-        init_params = self.norm_params(init_params, self.n_INTs, self.n_oligos, self.n_primers)
-        
-        _loss = self.loss if loss is None else loss
-        
-        loss = lambda params: _loss(params,self.connections,self.labels)
-        
-        jac = lambda x: onp.array(jax.grad(loss)(x)) if jac else None
-        
-        bounds = [(0,1) for _ in range(self.n_EXTs+self.n_oligos+self.n_primers)]  
-        
-        self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
-        self.fit_result.x = self.unnorm_params(self.fit_result.x, self.n_INTs, self.n_oligos, self.n_primers)
-        self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
-        return self.fit_result
     
    
     # def plot_INT_sweep(self, INT=None, rng=None, res=None, progress_bar=False, annotate='Outer', ax=None, indiv=True, update=False):
