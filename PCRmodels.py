@@ -965,6 +965,7 @@ class CAN(PCR):
 
         self.obj = obj
         self.fit_params = self.copies_rates_nMs[self.n_INTs:]
+        self.fixed_params = onp.zeros(self.fit_params.shape, dtype=bool)
 
         if compile_eqns: self.compileEquations()
 
@@ -1056,13 +1057,50 @@ class CAN(PCR):
 
         jac = lambda x: onp.array(jax.grad(loss)(x)) if jac else None
 
-        bounds = [(0,1) for _ in range(self.n_EXTs+self.n_oligos+self.n_primers)]
+        bounds = [(0,1) if not self.fixed_params[p] else (init_params[p],init_params[p]) for p in range(len(self.fit_params))]
 
         self.fit_result = minimize(loss, init_params, method=method, bounds=bounds, jac=jac)
         self.fit_result.x = self.unnorm_params(self.fit_result.x, self.n_INTs, self.n_oligos, self.n_primers)
         self.copies_rates_nMs = np.hstack([np.repeat(5,self.n_INTs),self.fit_result.x])
         return self.fit_result
 
+    def fix_param(self,param):
+        if type(param) is int: # treat as an index
+            self.fixed_params[param] = True
+        elif param == 'primers': # fix primer concentrations
+            self.fixed_params[-self.n_primers:] = True
+        elif param == 'rates': # fix oligo rates
+            self.fixed_params[self.n_EXTs:-self.n_primers] = True
+        elif param == 'copies': # fix oligo copies
+            self.fixed_params[:self.n_EXTs] = True
+        elif param == 'none': # fix everything
+            self.fixed_params = onp.ones(self.fit_params.shape, dtype=bool)
+        elif type(param) is list:
+            # If size exactly matches number of parameters, treat as replacement for fixed_params
+            if all(param.shape == self.fixed_params.shape) and all(type(p) is bool for p in param):
+                self.fixed_params = param
+            else: # otherwise treat as list of individual indices or names
+                for p in param:
+                    self.fix_param(p)
+
+    def release_params(self,param):
+        if type(param) is int: # treat as an index
+            self.fixed_params[param] = False
+        elif param == 'primers': # fix primer concentrations
+            self.fixed_params[-self.n_primers:] = False
+        elif param == 'rates': # fix oligo rates
+            self.fixed_params[self.n_EXTs:-self.n_primers] = False
+        elif param == 'copies': # fix oligo copies
+            self.fixed_params[:self.n_EXTs] = False
+        elif param == 'all': # fix everything
+            self.fixed_params = onp.zeros(self.fit_params.shape, dtype=bool)
+        elif type(param) is list:
+            # If size exactly matches number of parameters, treat as replacement for fixed_params
+            if all(param.shape == self.fixed_params.shape) and all(type(p) is bool for p in param):
+                self.fixed_params = param
+            else: # otherwise treat as list of individual indices or names
+                for p in param:
+                    self.release_params(p)
 
 class BDA(CAN):
 
