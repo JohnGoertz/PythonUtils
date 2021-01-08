@@ -764,7 +764,7 @@ class CAN(PCR):
         signals = np.dot(labels,strands)
         return -np.diff(signals)
 
-    def get_diffs(self,pt=None,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None,update_idx=None,norm=None,labels=None):
+    def get_diffs(self,pt,copies=None,cycles=None,strand_rates=None,s_cm=None,p_cm=None,update_idx=None,norm=None,labels=None):
         if copies==None:
             copies=self.copies
         if cycles==None:
@@ -783,6 +783,44 @@ class CAN(PCR):
             labels=self.labels
         return self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels)
 
+    def _solution_at(self, copies, cycles, strand_rates, cm, labels, pts, oligos):
+        norm = self.norm.copies
+        oligos = np.array(oligos)
+        n_o, n_p = cm.shape
+        n_s = n_o*2
+
+        # primer that generates each strand
+        s_cm = np.reshape(np.abs(np.hstack([cm-1,cm+1]))//2,[n_s,n_p])
+        # primer that binds to each strand
+        p_cm = np.reshape(np.abs(np.hstack([cm+1,cm-1]))//2,[n_s,n_p])
+
+        update_idx = np.squeeze(np.reshape(np.vstack([oligos*2,oligos*2+1]),[2*len(oligos),1],order='F'))
+
+        diffs = jax.vmap(lambda pt: self._get_diffs(pt,copies,cycles,strand_rates,s_cm,p_cm,update_idx,norm,labels))(pts)
+
+        ## Reshape sweep_solution into a grid
+        #diffs = np.array(diffs).T.reshape(*grids[0].shape)
+        #if diffs.ndim>1:
+        #    diffs = diffs.transpose([1,0,*np.arange(2,len(oligos))])
+
+        return diffs
+
+    def solution_at(self, pts, oligos=None, copies=None, cycles=None, strand_rates=None, cm=None, labels=None):
+        copies = self.copies if copies is None else copies
+
+        cycles = np.arange(self.cycles+1, dtype=float) if cycles is None else cycles
+
+        strand_rates = self.strand_rates if strand_rates is None else strand_rates
+
+        cm = self.connections if cm is None else cm
+
+        labels = self.labels if labels is None else labels
+
+        oligos = self.INT_idxs if oligos is None else oligos
+
+        diffs = self._solution_at(copies, cycles, strand_rates, cm, labels, pts, oligos)
+        self.solution = diffs
+        return diffs
 
 
     def _solution_sweep(self, copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos):
@@ -805,7 +843,6 @@ class CAN(PCR):
         if diffs.ndim>1:
             diffs = diffs.transpose([1,0,*np.arange(2,len(oligos))])
 
-        self.solution = diffs
         return diffs
 
     def solution_sweep(self, copies=None, cycles=None, strand_rates=None, cm=None, labels=None, arrays=None, grids=None, pts=None, oligos=None):
@@ -843,11 +880,12 @@ class CAN(PCR):
 
         labels = self.labels if labels is None else labels
 
-        if None in [arrays, grids, pts, oligos]:
+        if any(p is None for p in [arrays, grids, pts, oligos]):
             arrays, grids, pts, oligos = self.sweep_setup
 
-        return self._solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
-
+        diffs = self._solution_sweep(copies, cycles, strand_rates, cm, labels, arrays, grids, pts, oligos)
+        self.solution = diffs
+        return diffs
 
 
     def compileEquations(self):
